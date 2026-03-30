@@ -6,7 +6,7 @@ That is where agent reinforcement learning becomes interesting. Once the agent c
 
 This page introduces the training scripts under `examples/agent_train`, explains how **agent config** is defined and used, and compares the **synchronous** and **fully asynchronous** training recipes built on top of `verl`.
 
-All runnable scripts referenced in this document live under `examples/agent_train`.
+The training launchers live under `examples/agent_train`.
 
 ---
 
@@ -59,11 +59,11 @@ Prepare the training and validation datasets first:
 export RAY_DATA_HOME=~/verl
 
 # Training set: r2e-gym-subset
-python examples/agent_train/prepare_data.py \
+python examples/data_preprocess/r2e_gym_subset_filtered.py \
     --local-save-dir "${RAY_DATA_HOME}/data/swe_agent"
 
 # Validation set: SWE-bench Verified
-python examples/agent_interaction/prepare_data.py \
+python examples/data_preprocess/swe_bench_verified.py \
     --local-save-dir "${RAY_DATA_HOME}/data/swe_agent"
 ```
 

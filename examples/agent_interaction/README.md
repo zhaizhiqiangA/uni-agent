@@ -12,11 +12,11 @@ The inference process consists of two main steps:
 
 ## Step 1: Prepare the Dataset
 
-Use the `prepare_data.py` script to download and process the dataset. This script formats the inputs so that each instance contains the necessary `tools_kwargs` (like `instance_id`) needed to boot up the SWE-agent environments.
+Use `examples/data_preprocess/swe_bench_verified.py` to download and process the dataset. This script formats the inputs so that each instance contains the necessary `tools_kwargs` (like `instance_id`) needed to boot up the SWE-agent environments.
 
 ```bash
-# By default, it saves the data to ~/data/swe_agent/swe_bench_verified.parquet
-python prepare_data.py --local-save-dir ~/data/swe_agent
+# From repo root. By default, it saves the data to ~/data/swe_agent/swe_bench_verified.parquet
+python examples/data_preprocess/swe_bench_verified.py --local-save-dir ~/data/swe_agent
 ```
 
 ---

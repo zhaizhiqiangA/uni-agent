@@ -4,7 +4,7 @@ Another important class of agent tasks is repeated environment interaction: give
 
 This page focuses on this pattern. After setting up an agent environment, we show how to run **model-environment interaction** at scale. We use the **SWE agent** workflow as an example: prepare data, run the agent loop with multiple workers, and perform verification.
 
-All runnable code for this page lives under `examples/agent_interaction`.
+The inference and verification scripts for this page live under `examples/agent_interaction`.
 
 **Model performance on swe-bench-verified using uni-agent:**
 
@@ -20,10 +20,10 @@ All runnable code for this page lives under `examples/agent_interaction`.
 
 We start from data, because a parallel interaction workload is more than just a prompt string. Each sample needs not only the task description, but also the environment and reward metadata required to run the interaction and verification correctly.
 
-Use `prepare_data.py` to fetch [SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) and build a Parquet file in the format the framework expects. Each row includes prompts and `extra_info.tools_kwargs`, which the agent loop uses when starting each task.
+Use `examples/data_preprocess/swe_bench_verified.py` to fetch [SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) and build a Parquet file in the format the framework expects. Each row includes prompts and `extra_info.tools_kwargs`, which the agent loop uses when starting each task.
 
 ```bash
-DEPLOYMENT=vefaas python examples/agent_interaction/prepare_data.py --local-save-dir ~/data/swe_agent
+DEPLOYMENT=vefaas python examples/data_preprocess/swe_bench_verified.py --local-save-dir ~/data/swe_agent
 ```
 
 The keys under `tools_kwargs` are defined per sample and must match what the agent loop and the `RewardSpec` expect:
@@ -172,7 +172,7 @@ The script uses a fixed number of Ray workers, for example 8, and a semaphore, f
 
 | Step              | Script                    | Purpose |
 |-------------------|---------------------------|--------|
-| Prepare data | `prepare_data.py` | Download SWE-bench Verified and write a Parquet file with `tools_kwargs` |
+| Prepare data | `examples/data_preprocess/swe_bench_verified.py` | Download SWE-bench Verified and write a Parquet file with `tools_kwargs` |
 | Parallel inference | `parallel_infer.py` | Run the agent loop with many workers and compute the mean reward score |
 | Parallel verify | `parallel_verify_swe.py` | Re-run evaluation only, including gold patch application and reward computation, in parallel |
 
