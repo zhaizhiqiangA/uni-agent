@@ -116,14 +116,7 @@ def build_swe_rebench():
         }
         instance_id = metadata["instance_id"]
         image_name = get_vefaas_image_name(dataset_id, instance_id)
-        reset_cmds = [
-            "cd /testbed",
-            "git restore .",
-            "git reset --hard",
-            f"git checkout {metadata['base_commit']}",
-            "git clean -fdq",
-        ]
-        reset_script = " && ".join(reset_cmds)
+        reset_script = ""
         sample = {
             "prompt": [
                 {"role": "system", "content": SYSTEM_PROMPT},
