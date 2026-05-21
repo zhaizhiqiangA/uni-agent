@@ -16,7 +16,7 @@ from typing import Any
 
 from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
 
-from examples.swe_agent_blackbox.reward import evaluate_in_env
+from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +110,7 @@ async def mini_swe_agent_runner(
             logger.info("post_setup_cmd done")
 
     # 3. Prepare metadata
-    reward_config = tools_kwargs.get("reward", {})
-    metadata = {
-        "data_source": reward_config.get("name", "unknown"),
-        "reward_model": reward_config.get("metadata", {}),
-    }
-    eval_timeout = int(os.environ.get("SWE_AGENT_EVAL_TIMEOUT", "600"))
+    metadata, eval_timeout = build_reward_context(tools_kwargs)
 
     try:
         # 4. Create LitellmModel pointing at gateway

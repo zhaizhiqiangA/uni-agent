@@ -1,6 +1,7 @@
 """Reward utilities for the blackbox SWE-agent recipe.
 
 Contains:
+- build_reward_context: extract reward metadata + eval_timeout from tools_kwargs
 - compute_score: thin reward function that reads reward_score from extra_info
 - evaluate_in_env: run reward evaluation in Docker env (shared by both runners)
 """
@@ -8,9 +9,21 @@ Contains:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def build_reward_context(tools_kwargs: dict) -> tuple[dict[str, Any], int]:
+    """Extract reward metadata and eval_timeout from per-sample tools_kwargs."""
+    reward_config = tools_kwargs.get("reward", {})
+    metadata = {
+        "data_source": reward_config.get("name", "unknown"),
+        "reward_model": reward_config.get("metadata", {}),
+    }
+    eval_timeout = int(os.environ.get("SWE_AGENT_EVAL_TIMEOUT", "600"))
+    return metadata, eval_timeout
 
 
 def compute_score(data_source: str, solution_str: str, ground_truth: str, extra_info=None) -> float:

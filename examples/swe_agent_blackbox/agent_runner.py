@@ -18,7 +18,7 @@ from uni_agent.interaction.model import OpenAICompatibleChatModel
 from uni_agent.interaction.tools_manager import ToolsManager, ToolsManagerConfig
 from uni_agent.tools import ToolConfig
 
-from examples.swe_agent_blackbox.reward import evaluate_in_env
+from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +73,11 @@ async def swe_agent_runner(
 
     messages = (
         list(raw_prompt) if isinstance(raw_prompt, list)
-        else [{"role": "user", "content": raw_prompt}] if isinstance(raw_prompt, str)
         else [{"role": "user", "content": str(raw_prompt)}]
     )
 
     env = _create_agent_env(f"swe_bb_{sample_index}", tools_kwargs, agent_config)
-    reward_config = tools_kwargs.get("reward", {})
-    metadata = {
-        "data_source": reward_config.get("name", "unknown"),
-        "reward_model": reward_config.get("metadata", {}),
-    }
-    eval_timeout = int(os.environ.get("SWE_AGENT_EVAL_TIMEOUT", "600"))
+    metadata, eval_timeout = build_reward_context(tools_kwargs)
 
     try:
         await env.start()
