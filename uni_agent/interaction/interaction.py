@@ -70,7 +70,8 @@ class AgentInteraction:
                 f"Prompt Tokens: {generation_info['prompt_tokens']}, "
                 f"Completion Tokens: {generation_info['completion_tokens']}"
             )
-            self.logger.debug(f"Model Output:\n{model_output}")
+            self.logger.debug(f"model_output:\n{model_output[:1000]}")
+            self.logger.debug(f"structured_tool_calls: {rollout_cache.get('extra_fields', {}).get('last_tool_calls', [])}")
         except MaxTokenExceededError as e:
             self.logger.error(str(e))
             step_output.exit_reason = "token_limit"
@@ -87,8 +88,10 @@ class AgentInteraction:
                     content=model_output,
                     tool_calls_data=structured_tool_calls,
                 )
+                self.logger.debug(f"parse_structured_action -> content={content[:300] if content else ''!r}, tool_calls={tool_calls}")
             else:
                 content, tool_calls = await self.tools_manager.parse_action(model_output=model_output)
+                self.logger.debug(f"parse_action -> content={content[:300] if content else ''!r}, tool_calls={tool_calls}")
         except FunctionCallFormatError as e:
             user_message = {"role": "tool", "content": str(e)}
             self.messages.append(user_message)  # error message
@@ -113,6 +116,7 @@ class AgentInteraction:
         with simple_timer("tool_calls", self.rollout_cache["metrics"]):
             try:
                 observation = await self.env.run_action(action_cmd, action_timeout=self.action_timeout)
+                self.logger.debug(f"env.run_action returned: {observation[:500]!r}")
                 tool_message = {"role": "tool", "content": observation}
                 self.messages.append(tool_message)  # tool response message
                 self.rollout_cache = await self.model.append_messages_to_rollout_cache(

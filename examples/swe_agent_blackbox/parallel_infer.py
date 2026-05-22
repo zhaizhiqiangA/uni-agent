@@ -219,6 +219,7 @@ def run_inference(
         tk = (sample.get("extra_info") or {}).get("tools_kwargs", {})
         if agent_config_path:
             tk["agent_config_path"] = agent_config_path
+        tk["model_path"] = os.path.expanduser(model_path)
         _tools_kwargs_list.append(tk)
 
     from tensordict import TensorDict

@@ -360,17 +360,23 @@ class TestInferenceEndToEnd:
         """Run 1 sample swe_bench inference with uniagent runner."""
         from examples.swe_agent_blackbox.parallel_infer import run_inference
 
+        model_path = os.environ.get("TEST_MODEL_PATH", "/data1/models/Qwen/Qwen3.5-4B")
+        tp = int(os.environ.get("TEST_TENSOR_PARALLEL_SIZE", "2"))
+        prompt_length = int(os.environ.get("TEST_PROMPT_LENGTH", "4096"))
+        response_length = int(os.environ.get("TEST_RESPONSE_LENGTH", "16384"))
+
         result = run_inference(
-            model_path="/data1/models/Qwen/Qwen3.5-4B",
+            model_path=model_path,
             data_path="/tmp/swe_local_8.parquet",
             max_samples=1,
             n=1,
             engine="vllm",
-            tensor_parallel_size=2,
+            tensor_parallel_size=tp,
             gateway_count=1,
             runner="uniagent",
-            prompt_length=4096,
-            response_length=16384,
+            prompt_length=prompt_length,
+            response_length=response_length,
+            agent_config_path="examples/swe_agent_blackbox/config/agent_config.yaml",
         )
         assert result is not None
         assert "per_sample_scores" in result
@@ -380,17 +386,23 @@ class TestInferenceEndToEnd:
         """Run 1 sample r2e_gym inference with uniagent runner."""
         from examples.swe_agent_blackbox.parallel_infer import run_inference
 
+        model_path = os.environ.get("TEST_MODEL_PATH", "/data1/models/Qwen/Qwen3.5-4B")
+        tp = int(os.environ.get("TEST_TENSOR_PARALLEL_SIZE", "2"))
+        prompt_length = int(os.environ.get("TEST_PROMPT_LENGTH", "4096"))
+        response_length = int(os.environ.get("TEST_RESPONSE_LENGTH", "16384"))
+
         result = run_inference(
-            model_path="/data1/models/Qwen/Qwen3.5-4B",
+            model_path=model_path,
             data_path="/tmp/r2e_local_8.parquet",
             max_samples=1,
             n=1,
             engine="vllm",
-            tensor_parallel_size=2,
+            tensor_parallel_size=tp,
             gateway_count=1,
             runner="uniagent",
-            prompt_length=4096,
-            response_length=16384,
+            prompt_length=prompt_length,
+            response_length=response_length,
+            agent_config_path="examples/swe_agent_blackbox/config/agent_config.yaml",
         )
         assert result is not None
         assert "per_sample_scores" in result

@@ -39,6 +39,25 @@ def load_agent_config(path: str) -> dict[str, Any]:
     return configs or {}
 
 
+def _detect_tool_parser(model_path: str) -> str | None:
+    """Detect tool parser from the model's tokenizer chat template."""
+    import json as _json
+
+    tok_config_path = os.path.join(os.path.expanduser(model_path), "tokenizer_config.json")
+    if not os.path.isfile(tok_config_path):
+        return None
+    with open(tok_config_path) as f:
+        cfg = _json.load(f)
+    template = cfg.get("chat_template", "")
+    if "tools" not in template:
+        return None
+    if "<function=" in template and "<parameter=" in template:
+        return "qwen3_coder"
+    if '"name"' in template:
+        return "hermes"
+    return None
+
+
 def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> AgentEnv:
     """Create AgentEnv from agent_config + per-sample tools_kwargs overrides."""
     env_config = dict(agent_config.get("env", {}))
@@ -70,7 +89,9 @@ async def swe_agent_runner(
     """Run the uniagent SWE-agent through the gateway with in-process reward."""
     tools_kwargs = tools_kwargs or {}
     config_path = agent_config_path or tools_kwargs.get("agent_config_path")
-    agent_config = load_agent_config(config_path) if config_path else {}
+    if not config_path:
+        raise ValueError("agent_config_path is required for uni-agent runner (via parameter or tools_kwargs)")
+    agent_config = load_agent_config(config_path)
     interaction_cfg = agent_config.get("interaction", {})
 
     messages = (
@@ -93,10 +114,15 @@ async def swe_agent_runner(
         )
 
         tools_config = agent_config.get("tools", [])
+        parser_name = agent_config.get("tool_parser") or tools_kwargs.get("tool_parser")
+        if not parser_name:
+            model_path = tools_kwargs.get("model_path")
+            if model_path:
+                parser_name = _detect_tool_parser(model_path)
         tools_manager = ToolsManager(
             tools_manager_config=ToolsManagerConfig(
                 tools=[ToolConfig(name=t["name"]) for t in tools_config],
-                parser=agent_config.get("tool_parser", "qwen3_coder"),
+                parser=parser_name or "qwen3_coder",
             ),
         )
         model.set_tools_schemas(tools_manager.tools_schemas)
@@ -112,10 +138,32 @@ async def swe_agent_runner(
             max_turns=interaction_cfg.get("max_turns", 100),
         )
 
+        await env.install_tools(tools_manager.tools)
         logger.info("[sample %d] running agent, max_turns=%d", sample_index, interaction_cfg.get("max_turns", 100))
         result = await interaction.run()
         trajectory = result.get("trajectory", [])
         logger.info("[sample %d] agent finished, %d steps", sample_index, len(trajectory))
+
+        if os.environ.get("SWE_AGENT_LOG_TRAJECTORY") == "1":
+            for i, step in enumerate(trajectory):
+                if hasattr(step, "thought"):
+                    # StepOutput (Pydantic): thought / action / observation
+                    if step.thought:
+                        logger.info("[sample %d] step %d thought: %s", sample_index, i, step.thought[:500])
+                    if step.action:
+                        logger.info("[sample %d] step %d action: %s", sample_index, i, step.action[:500])
+                    if step.observation:
+                        logger.info("[sample %d] step %d observation: %s", sample_index, i, step.observation[:500])
+                elif isinstance(step, dict):
+                    content = step.get("content", "")
+                    role = step.get("role", "?")
+                    if role == "assistant" and content:
+                        logger.info("[sample %d] step %d assistant: %s", sample_index, i, content[:500])
+                    for tc in step.get("tool_calls", []):
+                        func = tc.get("function", {}) if isinstance(tc, dict) else {}
+                        logger.info("[sample %d] step %d tool_call: %s(%s)", sample_index, i, func.get("name", "?"), func.get("arguments", "")[:300])
+                    if role == "tool":
+                        logger.info("[sample %d] step %d tool_result: %s", sample_index, i, str(content)[:300])
 
         # Evaluate reward in the same Docker env
         logger.info("[sample %d] evaluating reward, data_source=%s", sample_index, metadata["data_source"])
