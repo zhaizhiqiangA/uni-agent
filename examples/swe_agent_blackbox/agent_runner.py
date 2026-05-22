@@ -69,7 +69,8 @@ async def swe_agent_runner(
 ) -> None:
     """Run the uniagent SWE-agent through the gateway with in-process reward."""
     tools_kwargs = tools_kwargs or {}
-    agent_config = load_agent_config(agent_config_path) if agent_config_path else {}
+    config_path = agent_config_path or tools_kwargs.get("agent_config_path")
+    agent_config = load_agent_config(config_path) if config_path else {}
     interaction_cfg = agent_config.get("interaction", {})
 
     messages = (
@@ -81,7 +82,9 @@ async def swe_agent_runner(
     metadata, eval_timeout = build_reward_context(tools_kwargs)
 
     try:
+        logger.info("[sample %d] starting env, image=%s", sample_index, agent_config.get("env", {}).get("deployment", {}).get("image", "N/A"))
         await env.start()
+        logger.info("[sample %d] env started", sample_index)
 
         model = OpenAICompatibleChatModel(
             base_url=session.base_url,
@@ -109,13 +112,15 @@ async def swe_agent_runner(
             max_turns=interaction_cfg.get("max_turns", 100),
         )
 
+        logger.info("[sample %d] running agent, max_turns=%d", sample_index, interaction_cfg.get("max_turns", 100))
         result = await interaction.run()
         trajectory = result.get("trajectory", [])
-        logger.info("interaction finished, %d steps", len(trajectory))
+        logger.info("[sample %d] agent finished, %d steps", sample_index, len(trajectory))
 
         # Evaluate reward in the same Docker env
+        logger.info("[sample %d] evaluating reward, data_source=%s", sample_index, metadata["data_source"])
         score, eval_result = await evaluate_in_env(env, metadata, eval_timeout)
-        logger.info("reward: score=%s, resolved=%s", score, eval_result.get("resolved"))
+        logger.info("[sample %d] reward done, score=%s, resolved=%s", sample_index, score, eval_result.get("resolved"))
 
         # Signal completion with reward_info
         reward_info = {"reward_score": score, **eval_result}

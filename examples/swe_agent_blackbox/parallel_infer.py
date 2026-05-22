@@ -217,8 +217,8 @@ def run_inference(
     _tools_kwargs_list = []
     for sample in samples:
         tk = (sample.get("extra_info") or {}).get("tools_kwargs", {})
-        if agent_cfg and runner != "mini_swe":
-            tk["_agent_config"] = agent_cfg
+        if agent_config_path:
+            tk["agent_config_path"] = agent_config_path
         _tools_kwargs_list.append(tk)
 
     from tensordict import TensorDict
