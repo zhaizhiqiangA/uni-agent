@@ -22,7 +22,7 @@
 | 9 | mini_swe_agent_runner 签名与框架调用匹配 | 签名 `(*, raw_prompt, session, sample_index, session_runtime, tools_kwargs=None)` — 兼容 | ⬜ |
 | 10 | `SWEAgentFramework._score_trajectories` 签名与父类匹配 | 父类签名 `(self, session_trajectories: list[Trajectory], sample_fields: dict)` — 子类签名一致 | ⬜ |
 | 11 | `SessionRuntime.complete_session` 调用正确 | 两个 runner 均调用 `await session_runtime.complete_session(session.session_id, reward_info=...)` — 与 Protocol 定义 `async def complete_session(self, session_id: str, reward_info: dict | None = None)` 一致 | ⬜ |
-| 12 | `Trajectory.reward_info` 字段存在 | Trajectory dataclass 包含 `reward_info: dict[str, Any] = field(default_factory=dict)` — `_score_trajectories` 中 `session_trajectories[-1].reward_info` 可访问 | ⬜ |
+| 12 | `Trajectory.reward_info` 字段存在 | Trajectory dataclass 必需字段为 `prompt_ids, response_ids, response_mask`，可选字段含 `reward_info: dict[str, Any] = field(default_factory=dict)` — `_score_trajectories` 中 `session_trajectories[-1].reward_info` 可访问 | ⬜ |
 
 ### 1.3 Reward 数据流
 
@@ -50,7 +50,7 @@
 |---|--------|------|------|
 | 23 | `run_train.sh` 参数传递完整 | 环境变量 → Hydra override 参数覆盖关系正确 | ⬜ |
 | 24 | `run_infer.sh` 参数传递完整 | CLI 参数与 `parallel_infer.py` argparse 参数一一对应 | ⬜ |
-| 25 | `run_infer.sh` 缺少 `--runner` 传递 | 当前未将 `RUNNER` 环境变量传递给 `--runner` 参数，默认 `uniagent` | ⬜ |
+| 25 | `run_infer.sh` 参数传递完整（含 --runner） | `RUNNER` 环境变量传递给 `--runner` 参数，默认 `uniagent` | ⬜ |
 
 ### 1.6 逻辑审查
 
@@ -102,6 +102,6 @@
 
 | # | 项目 | 详情 | 优先级 |
 |---|------|------|--------|
-| 45 | `run_infer.sh` 缺少 `--runner` 参数传递 | 需决定是否支持 `RUNNER` 环境变量选择 runner | 低 |
-| 46 | `AgentInteraction.timeout_budget=-1` 行为 | 需确认 `-1` 是否表示无限制，还是应改为 `0` 或不传 | 中 |
+| ~~45~~ | ~~`run_infer.sh` 缺少 `--runner` 参数传递~~ | **已修复**：已添加 `RUNNER` 环境变量 + `--runner` 传递 | ~~低~~ |
+| ~~46~~ | ~~`AgentInteraction.timeout_budget=-1` 行为~~ | **已修复**：默认值改为 `300`，-1 实际语义是"timeout 即终止"而非"无限" | ~~中~~ |
 | 47 | `agent_config.yaml` 中 `max_turns: 3` 过低 | 作为默认值可能不够，训练脚本会 override 为 100，但推理默认可能也需调高 | 低 |

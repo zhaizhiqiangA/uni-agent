@@ -189,7 +189,6 @@ def run_inference(
     llm_client = llm_server_manager.get_client()
     gateway_actor_kwargs = {
         "tokenizer": hf_tokenizer(os.path.expanduser(model_path)),
-        "host": "127.0.0.1",
         "base_sampling_params": {"temperature": temperature, "top_p": top_p},
     }
     if resolved_tool_parser:

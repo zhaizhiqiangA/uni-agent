@@ -47,6 +47,7 @@ def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> Ag
     if env_override:
         deployment = dict(env_config.get("deployment", {}))
         deployment.update({k: env_override.pop(k) for k in ["image", "command"] if k in env_override})
+        deployment.setdefault("type", "local")
         env_config["deployment"] = deployment
         env_config.update(env_override)
     return AgentEnv(run_id=run_id, env_config=AgentEnvConfig(**env_config))
@@ -104,7 +105,7 @@ async def swe_agent_runner(
             tools_manager=tools_manager,
             messages=messages,
             action_timeout=interaction_cfg.get("action_timeout", 300),
-            timeout_budget=interaction_cfg.get("timeout_budget", -1),
+            timeout_budget=interaction_cfg.get("timeout_budget", 300),
             max_turns=interaction_cfg.get("max_turns", 100),
         )
 
