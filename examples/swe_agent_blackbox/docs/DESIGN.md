@@ -58,6 +58,8 @@ YAML 配置
 
 包含 `DockerEnvForReward` 适配器（sync → async 接口适配）
 
+Docker 容器启动时会设置 `--entrypoint ""`，清除 sweb 镜像默认的 `/bin/bash` ENTRYPOINT，确保 `sleep 2h` 能直接执行。
+
 ### 3.4 `reward.py` — compute_score + evaluate_in_env
 
 - `compute_score(data_source, solution_str, ground_truth, extra_info)` — 从 `extra_info["reward_score"]` 读取分数

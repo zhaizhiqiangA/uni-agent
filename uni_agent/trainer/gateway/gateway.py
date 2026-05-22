@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import replace
 from typing import Any
@@ -529,6 +530,22 @@ class _GatewayActor:
         except MalformedRequestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        _log_trajectory = os.environ.get("SWE_AGENT_LOG_TRAJECTORY") == "1"
+        if _log_trajectory:
+            _msgs = request_context["messages"]
+            print(f"[gateway] session={session_id} request: {len(_msgs)} messages, "
+                  f"roles={[m['role'] for m in _msgs]}")
+            for _i, _m in enumerate(_msgs):
+                _tc = _m.get("tool_calls")
+                if _tc:
+                    _tc_names = [tc.get("function", {}).get("name", "?") for tc in _tc]
+                else:
+                    _tc_names = None
+                print(f"[gateway]   msg[{_i}] role={_m.get('role')} "
+                      f"tool_call_id={_m.get('tool_call_id', '')} "
+                      f"tool_calls={_tc_names} "
+                      f"content={str(_m.get('content', ''))[:300]}")
+
         async with session.generation_lock:
             if session.phase != SessionPhase.ACTIVE:
                 raise HTTPException(status_code=409, detail=f"Session {session_id} is {session.phase.value.lower()}")
@@ -613,6 +630,17 @@ class _GatewayActor:
             assistant_msg, finish_reason = await self._decode_response(
                 response_ids, tools=tools, stop_reason=output.stop_reason,
             )
+            if _log_trajectory:
+                _tc = assistant_msg.get("tool_calls")
+                if _tc:
+                    _tc_names = [tc.get("function", {}).get("name", "?") for tc in _tc]
+                else:
+                    _tc_names = None
+                print(f"[gateway] session={session_id} response: finish_reason={finish_reason} "
+                      f"tool_calls={_tc_names} "
+                      f"prompt_tokens={len(generation_context_ids)} "
+                      f"completion_tokens={len(response_ids)} "
+                      f"content={str(assistant_msg.get('content', ''))[:300]}")
             async with session.request_lock:
                 if session.phase != SessionPhase.ACTIVE:
                     raise HTTPException(

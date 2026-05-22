@@ -26,6 +26,7 @@ SWE-bench/SWE-rebench/R2E-Gym 评测需要 Docker 环境。
 | `SWE_AGENT_MAX_TURNS` | `100` | Agent 最大交互轮数 |
 | `SWE_AGENT_EVAL_TIMEOUT` | `600` | Reward 评测超时（秒） |
 | `VERL_LOGGING_LEVEL` | `INFO` | 日志级别 |
+| `SWE_AGENT_LOG_TRAJECTORY` | `0` | 设为 `1` 时 gateway 打印每条 request/response 的消息详情（调试用） |
 | `NCCL_P2P_DISABLE` | `1` | NCCL 配置 |
 | `NCCL_SHM_DISABLE` | `1` | NCCL 配置 |
 
