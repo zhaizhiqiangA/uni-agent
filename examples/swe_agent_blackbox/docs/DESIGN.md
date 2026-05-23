@@ -35,6 +35,8 @@ YAML 配置
 - 合并到 `sample_fields["extra_info"]` 中
 - 调用父类 `_score_trajectories` 走标准 reward worker 路径
 
+**基类推理模式 reward 传播**：`OpenAICompatibleAgentFramework._run_session` 在无 `reward_loop_worker_handles` 时，直接从 `trajectory.reward_info` 提取 `reward_score` 设置到 trajectory 上，确保推理模式下 reward 分数能正确写入 TQ store。
+
 ### 3.2 `agent_runner.py` — Uniagent Runner
 
 使用白盒交互组件：
@@ -72,6 +74,8 @@ YAML 配置
 独立推理脚本，使用 `_MockReplayBuffer` 避免训练依赖。
 支持 `--runner uniagent|mini_swe` 选择 runner 类型。
 内含 `load_swe_dataset` 数据集加载逻辑（支持 SWE-bench、SWE-rebench、R2E-Gym，自动将远程 registry 镜像名映射为本地名）。
+
+**推理模式 reward 传播**：推理模式下无 `reward_loop_worker_handles`，框架在 `_run_session` 中直接从 `trajectory.reward_info`（由 agent_runner 通过 `complete_session` 传入）提取 `reward_score` 并设置到 trajectory 上。`parallel_infer.py` 从 TQ store 读取 `rm_scores[-1, -1]`（最后一个 trajectory 的最后一个 token 位置）获取 score。
 
 ## 四、配置文件
 

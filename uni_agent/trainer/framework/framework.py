@@ -451,6 +451,19 @@ class OpenAICompatibleAgentFramework(AgentFramework):
         # Score the session's trajectories immediately after finalization,
         # consistent with VERL's per-sample reward path.
         if not self.reward_loop_worker_handles or not session_trajectories:
+            # No reward worker; apply reward_info from complete_session directly
+            # (agent_runner computed reward in-process).
+            if session_trajectories and session_trajectories[-1].reward_info:
+                ri = session_trajectories[-1].reward_info
+                score = float(ri.get("reward_score", 0.0))
+                session_trajectories = [
+                    replace(
+                        traj,
+                        reward_score=score,
+                        extra_fields={**traj.extra_fields, "reward_extra_info": ri},
+                    )
+                    for traj in session_trajectories
+                ]
             return session_trajectories, sample_fields
 
         annotations = await self._score_trajectories(session_trajectories, sample_fields)

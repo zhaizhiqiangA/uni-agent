@@ -265,7 +265,7 @@ def run_inference(
         if rm_scores is None:
             continue
         sample_idx = int(key.split("_")[1])
-        score = float(rm_scores.float().mean().item())
+        score = float(rm_scores.float()[-1, -1].item())
         per_sample_scores[sample_idx] += score
         sample_trajectory_counts[sample_idx] += 1
 
