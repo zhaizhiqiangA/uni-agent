@@ -138,6 +138,10 @@ RUNNER=mini_swe
 | Gateway timeout | agent 运行超时 | 增大 `COMPLETION_TIMEOUT` / `SWE_AGENT_MAX_TURNS` |
 | agent_runner signature 不匹配 | 缺少 session_runtime 参数 | 确保框架版本 >= 本次提交，框架会自动传入 |
 | NCCL 集群失败 | NCCL 配置问题 | 确认 `NCCL_P2P_DISABLE=1` |
+| R2E 容器启动超时 | R2E 镜像 swerex 在 venv 中 | `_create_agent_env` 自动处理，command 指向 `/opt/swerex-venv/bin/python3` |
+| SWE-bench 容器启动失败 | `python3` 指向 conda 环境无 swerex | agent_config 使用 `/usr/bin/python3` 绝对路径 |
+| GPU OOM | 模型+上下文超出显存 | 增大 `tensor_parallel_size` 或减小 `prompt_length` |
+| 串行测试 GPU 冲突 | 前一测试 vLLM 未释放 | 分开单独运行各测试 |
 
 ### 6.2 日志
 

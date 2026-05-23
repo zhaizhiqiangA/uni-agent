@@ -94,10 +94,6 @@ async def mini_swe_agent_runner(
     env_cfg.pop("environment_class", None)
     env_cfg["image"] = image
     env_cfg["container_timeout"] = "2h"
-    # Clear ENTRYPOINT so "sleep 2h" executes directly; newer sweb images
-    # set ENTRYPOINT to /bin/bash which breaks "sleep" as a CMD argument.
-    env_cfg.setdefault("run_args", ["--rm"])
-    env_cfg["run_args"] = ["--entrypoint", ""] + env_cfg["run_args"]
     env_cfg.setdefault("env", {})["GIT_PAGER"] = "cat"
     docker_env = DockerEnvironment(**env_cfg)
     logger.info("Docker container started: %s", docker_env.container_id[:12])

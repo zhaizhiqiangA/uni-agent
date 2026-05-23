@@ -119,10 +119,12 @@ class LocalDeployment(AbstractDeployment):
         return await self._runtime.is_alive(timeout=timeout)
 
     async def _wait_until_alive(self, timeout: float) -> IsAliveResponse:
+        self.logger.info(f"Waiting for runtime to become alive (timeout={timeout}s)...")
         try:
             return await _wait_until_alive(self.is_alive, timeout=timeout, function_timeout=0.5)
         except TimeoutError as e:
-            self.logger.error("Local runtime did not start within timeout.")
+            logs = self._get_container_logs(self._container_name) if self._container_name else ""
+            self.logger.error(f"Local runtime did not start within {timeout}s. Container logs:\n{logs}")
             await self.stop()
             raise e
 
@@ -277,10 +279,12 @@ class LocalDeployment(AbstractDeployment):
 
     async def _start_oci_container(self, token: str, container_name: str, published_port: int) -> None:
         command = self._format_command(token=token, port=self._config.runtime_port)
+        self.logger.info(f"Starting container '{container_name}' with command: {command}")
         result = await asyncio.to_thread(
             self._runtime_exec, self._build_run_command(container_name, published_port, command)
         )
         self._container_id = result.stdout.strip()
+        self.logger.info(f"Container '{container_name}' started, id={self._container_id[:12]}")
         host = await asyncio.to_thread(self._get_runtime_host, container_name)
         runtime_config = LocalRuntimeConfig(
             auth_token=token,

@@ -47,7 +47,9 @@ YAML 配置
 
 框架通过 `_run_session` 将 `session_runtime` 传递给 agent_runner，runner 直接调用 `session_runtime.complete_session(session_id, reward_info=...)` 通知完成，无需关心 gateway HTTP 细节。
 
-私有 helper：`load_agent_config`, `_deep_merge`, `_create_agent_env`
+私有 helper：`load_agent_config`, `_create_agent_env`
+
+**R2E 镜像兼容**：R2E-Gym 镜像的 swerex 安装在 `/opt/swerex-venv/bin/python3`（Python 3.11 venv），而非默认的 `python3`（Python 3.8）。`_create_agent_env` 会对 R2E 镜像（image 名含 `r2e`）自动覆盖 command 为 `/opt/swerex-venv/bin/python3 -m swerex.server`。
 
 ### 3.3 `mini_swe_agent_runner.py` — Mini-SWE-Agent Runner
 
@@ -57,8 +59,6 @@ YAML 配置
 - `DefaultAgent` — agent 循环
 
 包含 `DockerEnvForReward` 适配器（sync → async 接口适配）
-
-Docker 容器启动时会设置 `--entrypoint ""`，清除 sweb 镜像默认的 `/bin/bash` ENTRYPOINT，确保 `sleep 2h` 能直接执行。
 
 ### 3.4 `reward.py` — compute_score + evaluate_in_env
 

@@ -62,11 +62,17 @@ def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> Ag
     """Create AgentEnv from agent_config + per-sample tools_kwargs overrides."""
     env_config = dict(agent_config.get("env", {}))
     env_override = dict(tools_kwargs.get("env", {}))
-    # Patch deployment image/command from per-sample override
     if env_override:
         deployment = dict(env_config.get("deployment", {}))
         deployment.update({k: env_override.pop(k) for k in ["image", "command"] if k in env_override})
         deployment.setdefault("type", "local")
+        # R2E images keep swerex in a dedicated venv; use absolute path
+        image = deployment.get("image", "")
+        if "r2e" in image.lower():
+            deployment["command"] = (
+                "/opt/swerex-venv/bin/python3 -m swerex.server"
+                " --auth-token {token}"
+            )
         env_config["deployment"] = deployment
         env_config.update(env_override)
     return AgentEnv(run_id=run_id, env_config=AgentEnvConfig(**env_config))
