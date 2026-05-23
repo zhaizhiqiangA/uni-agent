@@ -21,6 +21,10 @@ from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in
 logger = logging.getLogger(__name__)
 
 try:
+    import shlex
+    import subprocess
+    import uuid as _uuid
+
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.config import builtin_config_dir, get_config_from_spec
     from minisweagent.environments.docker import DockerEnvironment
@@ -29,6 +33,59 @@ try:
     _SWEBENCH_CONFIG = get_config_from_spec(str(builtin_config_dir / "benchmarks" / "swebench.yaml"))
 except ImportError:
     _SWEBENCH_CONFIG = None
+
+
+class _FixedCmdDockerEnvironment(DockerEnvironment):
+    """DockerEnvironment subclass that adapts CMD to the image's ENTRYPOINT.
+
+    Background:
+        DockerEnvironment._start_container hardcodes CMD as ["sleep", timeout].
+        This works for images whose ENTRYPOINT exec's CMD directly (e.g.
+        nvidia_entrypoint.sh), but fails for images whose ENTRYPOINT is
+        "/bin/bash" because "/bin/bash sleep 2h" causes bash to interpret
+        the /usr/bin/sleep ELF binary as a shell script and immediately exit
+        with "cannot execute binary file" (exit 126).
+
+    Fix:
+        Inspect the image's ENTRYPOINT at startup.  If it ends with "bash",
+        use ["-lc", "sleep <timeout>"] as CMD (matching the image's intended
+        format).  Otherwise, use the original ["sleep", "<timeout>"].
+    """
+
+    def _start_container(self):
+        container_name = f"minisweagent-{_uuid.uuid4().hex[:8]}"
+        entrypoint = self._detect_entrypoint()
+        if entrypoint and entrypoint.endswith("bash"):
+            cmd_suffix = ["-lc", f"sleep {self.config.container_timeout}"]
+        else:
+            cmd_suffix = ["sleep", self.config.container_timeout]
+        cmd = [
+            self.config.executable, "run", "-d",
+            "--name", container_name,
+            "-w", self.config.cwd,
+            *self.config.run_args,
+            self.config.image,
+            *cmd_suffix,
+        ]
+        self.logger.debug("Starting container with command: %s", shlex.join(cmd))
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=self.config.pull_timeout, check=True,
+        )
+        self.logger.info("Started container %s with ID %s", container_name, result.stdout.strip())
+        self.container_id = result.stdout.strip()
+
+    def _detect_entrypoint(self) -> str | None:
+        """Detect the image's ENTRYPOINT via docker inspect."""
+        try:
+            result = subprocess.run(
+                [self.config.executable, "inspect", self.config.image, "--format", "{{.Config.Entrypoint}}"],
+                capture_output=True, text=True, timeout=30,
+            )
+            ep = result.stdout.strip().strip("[]\"")
+            return ep if ep else None
+        except Exception:
+            return None
 
 
 # =====================================================================
@@ -95,7 +152,7 @@ async def mini_swe_agent_runner(
     env_cfg["image"] = image
     env_cfg["container_timeout"] = "2h"
     env_cfg.setdefault("env", {})["GIT_PAGER"] = "cat"
-    docker_env = DockerEnvironment(**env_cfg)
+    docker_env = _FixedCmdDockerEnvironment(**env_cfg)
     logger.info("Docker container started: %s", docker_env.container_id[:12])
 
     # 2b. Run post_setup_cmd if provided
@@ -130,7 +187,9 @@ async def mini_swe_agent_runner(
         agent_cfg = dict(_SWEBENCH_CONFIG.get("agent", {}))
         agent_cfg["step_limit"] = int(os.environ.get("SWE_AGENT_MAX_TURNS", str(agent_cfg.get("step_limit", 250))))
         agent_cfg["cost_limit"] = 0
+        logger.info("step_limit=%d, cost_limit=%s", agent_cfg["step_limit"], agent_cfg["cost_limit"])
         agent = DefaultAgent(model, docker_env, **agent_cfg)
+        logger.info("agent.config.step_limit=%d", agent.config.step_limit)
 
         # 6. Run agent in thread (DefaultAgent is synchronous)
         logger.info("starting DefaultAgent.run()...")

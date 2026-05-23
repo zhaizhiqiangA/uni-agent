@@ -62,6 +62,10 @@ YAML 配置
 
 包含 `DockerEnvForReward` 适配器（sync → async 接口适配）
 
+**`_FixedCmdDockerEnvironment`**：DockerEnvironment 子类，根据镜像 ENTRYPOINT 动态调整容器 CMD 格式。sweb 镜像 ENTRYPOINT 为 `/bin/bash` 时使用 `-lc "sleep <timeout>"`（走 bash 内建 sleep），其他镜像（如 R2E-Gym 使用 nvidia_entrypoint.sh）使用原始 `sleep <timeout>`。
+
+**`SWE_AGENT_MAX_TURNS`**：通过环境变量控制 `DefaultAgent` 的 `step_limit`，限制 agent 最大迭代步数。
+
 ### 3.4 `reward.py` — compute_score + evaluate_in_env
 
 - `compute_score(data_source, solution_str, ground_truth, extra_info)` — 从 `extra_info["reward_score"]` 读取分数
@@ -74,6 +78,8 @@ YAML 配置
 独立推理脚本，使用 `_MockReplayBuffer` 避免训练依赖。
 支持 `--runner uniagent|mini_swe` 选择 runner 类型。
 内含 `load_swe_dataset` 数据集加载逻辑（支持 SWE-bench、SWE-rebench、R2E-Gym，自动将远程 registry 镜像名映射为本地名）。
+
+**异常容错**：`generate_sequences` 抛 `RuntimeError`（如所有 rollout 失败）时捕获异常并输出 `Resolved 0 / N` 统计，不会导致进程崩溃。
 
 **推理模式 reward 传播**：推理模式下无 `reward_loop_worker_handles`，框架在 `_run_session` 中直接从 `trajectory.reward_info`（由 agent_runner 通过 `complete_session` 传入）提取 `reward_score` 并设置到 trajectory 上。`parallel_infer.py` 从 TQ store 读取 `rm_scores[-1, -1]`（最后一个 trajectory 的最后一个 token 位置）获取 score。
 

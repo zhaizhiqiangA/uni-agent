@@ -252,7 +252,11 @@ def run_inference(
     async def _generate():
         return await framework.generate_sequences(batch_padded.batch)
 
-    stats = asyncio.run(_generate())
+    try:
+        stats = asyncio.run(_generate())
+    except RuntimeError as e:
+        logger.warning("generate_sequences failed: %s", e)
+        stats = {}
 
     # 7. Collect scores
     per_sample_scores = [0.0] * len(samples)
