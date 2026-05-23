@@ -120,6 +120,10 @@ def _trajectory_to_reward_dataproto(trajectory, sample_fields):
     for key in ("raw_prompt", "data_source", "reward_model", "extra_info", "tools_kwargs", "agent_name"):
         if key in sample_fields:
             non_tensor_batch[key] = np.array([sample_fields[key]], dtype=object)
+    if "data_source" not in non_tensor_batch:
+        non_tensor_batch["data_source"] = np.array(["unknown"], dtype=object)
+    if "reward_model" not in non_tensor_batch:
+        non_tensor_batch["reward_model"] = np.array([{"ground_truth": ""}], dtype=object)
     non_tensor_batch["__num_turns__"] = np.array([trajectory.num_turns])
 
     return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
@@ -355,13 +359,17 @@ class OpenAICompatibleAgentFramework(AgentFramework):
             if isinstance(outcome, Exception):
                 failed_sessions += 1
                 failure_reasons.append(_short_failure_reason(outcome))
+                logger.error("[TQ_DEBUG] uid=%s session=%d EXCEPTION: %s", uid, session_index, repr(outcome)[:500])
                 continue
 
             trajectories, session_sample_fields = outcome
             if not trajectories:
                 failed_sessions += 1
                 failure_reasons.append(f"empty trajectories for uid={uid} session_index={session_index}")
+                logger.error("[TQ_DEBUG] uid=%s session=%d EMPTY_TRAJECTORIES", uid, session_index)
                 continue
+
+            logger.info("[TQ_DEBUG] uid=%s session=%d SUCCESS trajectories=%d", uid, session_index, len(trajectories))
 
             success_sessions += 1
             await self._write_session_trajectories_to_tq(

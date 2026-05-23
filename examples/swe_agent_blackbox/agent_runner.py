@@ -161,6 +161,7 @@ async def swe_agent_runner(
         )
         model.set_tools_schemas(tools_manager.tools_schemas)
 
+        env_max_turns = int(os.environ["MAX_TURNS"]) if "MAX_TURNS" in os.environ else None
         interaction = AgentInteraction(
             run_id=f"swe_bb_{sample_index}",
             env=env,
@@ -169,7 +170,7 @@ async def swe_agent_runner(
             messages=messages,
             action_timeout=interaction_cfg.get("action_timeout", 300),
             timeout_budget=interaction_cfg.get("timeout_budget", 300),
-            max_turns=interaction_cfg.get("max_turns", 100),
+            max_turns=env_max_turns or interaction_cfg.get("max_turns", 100),
         )
 
         await env.install_tools(tools_manager.tools)

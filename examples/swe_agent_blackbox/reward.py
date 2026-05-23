@@ -26,11 +26,12 @@ def build_reward_context(tools_kwargs: dict) -> tuple[dict[str, Any], int]:
     return metadata, eval_timeout
 
 
-def compute_score(data_source: str, solution_str: str, ground_truth: str, extra_info=None) -> float:
+def compute_score(data_source: str, solution_str: str, ground_truth: str, extra_info=None) -> dict:
     """Read reward_score from extra_info, injected by SWEAgentFramework."""
+    score = 0.0
     if extra_info and "reward_score" in extra_info:
-        return float(extra_info["reward_score"])
-    return 0.0
+        score = float(extra_info["reward_score"])
+    return {"score": score}
 
 
 def _get_reward_spec(data_source: str):
