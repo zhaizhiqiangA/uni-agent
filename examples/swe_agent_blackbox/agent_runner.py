@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any
+from uuid import uuid4
 
 from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
 from uni_agent.interaction.env import AgentEnv, AgentEnvConfig
@@ -21,6 +23,17 @@ from uni_agent.tools import ToolConfig
 from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 
 logger = logging.getLogger(__name__)
+
+_port_counter = 10000
+_port_lock = threading.Lock()
+
+
+def _allocate_port() -> int:
+    global _port_counter
+    with _port_lock:
+        port = _port_counter
+        _port_counter += 1
+    return port
 
 
 # =====================================================================
@@ -73,8 +86,22 @@ def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> Ag
                 "/opt/swerex-venv/bin/python3 -m swerex.server"
                 " --auth-token {token}"
             )
+        else:
+            # SWE-bench images may lack swerex; install it before starting the server.
+            # pip package is "swe-rex", module is "swerex".
+            deployment["command"] = (
+                "/usr/bin/python3.10 -m pip install -q swe-rex"
+                " && exec /usr/bin/python3.10 -m swerex.server"
+                " --auth-token {token}"
+            )
         env_config["deployment"] = deployment
         env_config.update(env_override)
+    # Pre-allocate a unique port to avoid _pick_free_port race conditions
+    # when multiple sessions start concurrently.
+    deployment = dict(env_config.get("deployment", {}))
+    if "published_port" not in deployment:
+        deployment["published_port"] = _allocate_port()
+    env_config["deployment"] = deployment
     return AgentEnv(run_id=run_id, env_config=AgentEnvConfig(**env_config))
 
 
@@ -91,6 +118,7 @@ async def swe_agent_runner(
     session_runtime: SessionRuntime,
     tools_kwargs: dict | None = None,
     agent_config_path: str | None = None,
+    **kwargs,
 ) -> None:
     """Run the uniagent SWE-agent through the gateway with in-process reward."""
     tools_kwargs = tools_kwargs or {}
@@ -105,7 +133,7 @@ async def swe_agent_runner(
         else [{"role": "user", "content": str(raw_prompt)}]
     )
 
-    env = _create_agent_env(f"swe_bb_{sample_index}", tools_kwargs, agent_config)
+    env = _create_agent_env(f"swe_bb_{sample_index}_{uuid4().hex[:8]}", tools_kwargs, agent_config)
     metadata, eval_timeout = build_reward_context(tools_kwargs)
 
     try:

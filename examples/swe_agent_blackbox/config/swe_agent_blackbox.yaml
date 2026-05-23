@@ -37,6 +37,7 @@ actor_rollout_ref:
       enable: true
       max_assistant_turns: 2
       max_parallel_calls: 1
+      format: qwen3_coder
 
     agent:
       num_workers: 8

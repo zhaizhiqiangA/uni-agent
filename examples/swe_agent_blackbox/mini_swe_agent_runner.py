@@ -126,6 +126,7 @@ async def mini_swe_agent_runner(
     sample_index: int,
     session_runtime: SessionRuntime,
     tools_kwargs: dict | None = None,
+    **kwargs,
 ) -> None:
     """Run mini-swe-agent's DefaultAgent through the gateway with in-process reward."""
     if _SWEBENCH_CONFIG is None:
