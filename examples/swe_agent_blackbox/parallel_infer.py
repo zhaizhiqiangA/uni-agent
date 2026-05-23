@@ -208,7 +208,7 @@ def run_inference(
         rollout_config={"n": n, "val_kwargs": {"n": n}},
         completion_timeout=completion_timeout,
         wait_for_completion_after_agent_run=True,
-        max_concurrent_sessions=0,
+        max_concurrent_sessions=2,
     )
 
     # 6. Build batch data and run

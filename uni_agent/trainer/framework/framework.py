@@ -298,11 +298,13 @@ class OpenAICompatibleAgentFramework(AgentFramework):
             "num_failed_uids": 0,
             "failure_reasons": failure_reasons,
         }
-        for outcome in outcomes:
+        for i, outcome in enumerate(outcomes):
             if isinstance(outcome, Exception):
                 stats["num_failed_sessions"] += num_sessions
                 stats["num_failed_uids"] += 1
-                failure_reasons.append(_short_failure_reason(outcome))
+                reason = _short_failure_reason(outcome)
+                logger.error("prompt %d failed: %s", i, reason, exc_info=outcome)
+                failure_reasons.append(reason)
                 continue
             stats["num_success_sessions"] += outcome["num_success_sessions"]
             stats["num_failed_sessions"] += outcome["num_failed_sessions"]

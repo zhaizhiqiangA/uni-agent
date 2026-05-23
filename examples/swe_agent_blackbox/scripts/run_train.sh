@@ -64,7 +64,7 @@ echo "Batch size:  ${TRAIN_BATCH_SIZE}, N=${N}"
 echo "Epochs:      ${TOTAL_EPOCHS}"
 echo "====================================="
 
-python3 -m verl.trainer.main_ppo \
+python3 -m verl.trainer.main_ppo_sync \
     --config-name=swe_agent_blackbox \
     --config-path=examples/swe_agent_blackbox/config \
     actor_rollout_ref.model.path="${MODEL_PATH}" \

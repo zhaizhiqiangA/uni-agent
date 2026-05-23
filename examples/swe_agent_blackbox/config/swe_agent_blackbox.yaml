@@ -15,6 +15,8 @@ actor_rollout_ref:
 
   model:
     path: ???
+    override_config:
+      attn_implementation: eager
 
   rollout:
     name: vllm
@@ -82,7 +84,7 @@ algorithm:
 
 reward:
   custom_reward_function:
-    path: examples.swe_agent_blackbox.reward
+    path: pkg://examples/swe_agent_blackbox.reward
     name: compute_score
 
 trainer:
@@ -107,6 +109,6 @@ ray_kwargs:
     runtime_env:
       env_vars:
         TRANSFORMERS_ATTN_IMPLEMENTATION: eager
-        TRANSFER_QUEUE_ENABLE: null
+        TRANSFER_QUEUE_ENABLE: ""
         NCCL_P2P_DISABLE: "1"
         NCCL_SHM_DISABLE: "1"
