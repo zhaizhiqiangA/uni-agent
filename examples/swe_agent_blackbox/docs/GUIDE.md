@@ -141,6 +141,8 @@ RUNNER=mini_swe
 | R2E 容器启动超时 | R2E 镜像 swerex 在 venv 中 | `_create_agent_env` 自动处理，command 指向 `/opt/swerex-venv/bin/python3` |
 | SWE-bench 容器启动失败 | `python3` 指向 conda 环境无 swerex | agent_config 使用 `/usr/bin/python3` 绝对路径 |
 | GPU OOM | 模型+上下文超出显存 | 增大 `tensor_parallel_size` 或减小 `prompt_length` |
+| `context_length_exceeded` (400) | 多轮对话超出 max_model_len | 增大 `response_length` 或减少 `max_turns` |
+| `Can only get item pairs from a mapping` | tool_calls arguments 格式不兼容 | gateway 自动归一化，若仍报错检查模板是否支持 tool_calls |
 | 串行测试 GPU 冲突 | 前一测试 vLLM 未释放 | 分开单独运行各测试 |
 
 ### 6.2 日志

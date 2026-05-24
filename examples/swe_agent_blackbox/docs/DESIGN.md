@@ -66,6 +66,8 @@ YAML 配置
 
 **`SWE_AGENT_MAX_TURNS`**：通过环境变量控制 `DefaultAgent` 的 `step_limit`，限制 agent 最大迭代步数。
 
+**错误处理**：runner 异常时调用 `complete_session(reward=0)` 后 re-raise，framework 将 session 标记为 failed。上下文溢出等不可恢复错误会快速传播，不产生无意义的重试。
+
 ### 3.4 `reward.py` — compute_score + evaluate_in_env
 
 - `compute_score(data_source, solution_str, ground_truth, extra_info)` — 从 `extra_info["reward_score"]` 读取分数
@@ -73,7 +75,13 @@ YAML 配置
   - 根据 `data_source` 自动选择 reward spec（SWE-bench / SWE-rebench / R2E-Gym）
 - `_get_reward_spec(data_source)` — reward spec 查找
 
-### 3.5 `parallel_infer.py` — 推理入口
+### 3.5 Gateway 消息归一化与错误处理
+
+**`_normalize_tool_call_arguments`**：gateway 在处理请求时自动将 `tool_calls[].function.arguments` 从 JSON 字符串解析为 dict。OpenAI API 规范定义 arguments 为 JSON 字符串，但部分 chat template（如 Qwen）通过 `|items` 迭代需要 dict 对象。此归一化在 `_normalize_message` 中执行，确保所有经过 gateway 的消息格式一致，同时修复了前缀匹配（`_is_request_context_prefix`）和模板编码的问题。
+
+**`_backend.generate()` 异常映射**：gateway 捕获 vLLM 后端的所有异常，按 OpenAI API 规范映射为 HTTP 状态码：`ValueError`（如上下文长度超限）→ 400（`invalid_request_error`），其他异常 → 500（`internal_error`）。这避免了 agent 侧（litellm/tenacity）对不可恢复错误的盲目重试。
+
+### 3.6 `parallel_infer.py` — 推理入口
 
 独立推理脚本，使用 `_MockReplayBuffer` 避免训练依赖。
 支持 `--runner uniagent|mini_swe` 选择 runner 类型。
