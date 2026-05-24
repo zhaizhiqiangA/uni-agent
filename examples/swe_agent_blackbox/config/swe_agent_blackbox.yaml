@@ -27,15 +27,15 @@ actor_rollout_ref:
     temperature: 1.0
     top_p: 1.0
     n: 1
-    tensor_model_parallel_size: 4
-    gpu_memory_utilization: 0.5
+    tensor_model_parallel_size: 8
+    gpu_memory_utilization: 0.3
     calculate_log_probs: true
-    enable_sleep_mode: false
+    enable_sleep_mode: true
     free_cache_engine: false
 
     multi_turn:
       enable: true
-      max_assistant_turns: 2
+      max_assistant_turns: 1
       max_parallel_calls: 1
       format: qwen3_coder
 
