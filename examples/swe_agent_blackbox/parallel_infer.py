@@ -192,7 +192,11 @@ def run_inference(
         gateway_actor_kwargs=gateway_actor_kwargs,
     )
 
-    # 5. Create framework — reward handled inside agent_runner, no reward worker
+    # 5. Create RewardLoopWorker for compute_score
+    from verl.experimental.reward_loop.reward_loop import RewardLoopWorker
+    reward_worker = ray.remote(RewardLoopWorker).remote(config, None)
+
+    # 6. Create framework
     framework = SWEAgentFramework(
         session_runtime=gateway_runtime,
         agent_runner=_agent_runner,
@@ -201,6 +205,7 @@ def run_inference(
         completion_timeout=completion_timeout,
         wait_for_completion_after_agent_run=True,
         max_concurrent_sessions=2,
+        reward_loop_worker_handles=[reward_worker],
     )
 
     # 6. Build batch data and run
@@ -332,6 +337,10 @@ def _init_hydra_config(
     config.actor_rollout_ref.rollout.n_gpus_per_node = n_gpus_per_node
     config.trainer.nnodes = nnodes
     config.trainer.n_gpus_per_node = n_gpus_per_node
+
+    config.reward.custom_reward_function.path = "pkg://examples.swe_agent_blackbox.reward"
+    config.reward.custom_reward_function.name = "compute_score"
+    config.reward.num_workers = 1
 
     OmegaConf.set_struct(config.actor_rollout_ref.rollout, False)
     config.actor_rollout_ref.rollout.enable_sleep_mode = False

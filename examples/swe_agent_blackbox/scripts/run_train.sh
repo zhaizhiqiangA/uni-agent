@@ -66,7 +66,7 @@ echo "====================================="
 
 python3 -m verl.trainer.main_ppo_sync \
     --config-name=swe_agent_blackbox \
-    --config-path=examples/swe_agent_blackbox/config \
+    --config-path="$(pwd)/examples/swe_agent_blackbox/config" \
     actor_rollout_ref.model.path="${MODEL_PATH}" \
     data.train_files="['${TRAIN_DATA}']" \
     data.val_files="['${VAL_DATA}']" \

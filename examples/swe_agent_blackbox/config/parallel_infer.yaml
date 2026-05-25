@@ -6,6 +6,7 @@ defaults:
   - actor@actor_rollout_ref.actor: ${model_engine}_actor
   - rollout@actor_rollout_ref.rollout: rollout
   - model@actor_rollout_ref.model: hf_model
+  - reward: reward
   - _self_
 
 hydra:

@@ -24,7 +24,7 @@ YAML 配置
 - **无自定义 trainer adapter**：使用通用 `AgentFrameworkRolloutAdapter`
 - **reward 在 agent_runner 内计算**：agent 跑完后在同一 Docker 环境中执行评测
 - **reward_info 注入 extra_info**：`SWEAgentFramework` 子类覆写 `_score_trajectories`，合并 reward_info 到 sample_fields
-- **compute_score 极薄**：只从 `extra_info["reward_score"]` 读取浮点值
+- **compute_score 统一 reward 路径**：训练和推理均通过 `RewardLoopWorker` → `NaiveRewardManager` → `compute_score` 计算最终 reward
 
 ## 三、模块说明
 
@@ -35,7 +35,7 @@ YAML 配置
 - 合并到 `sample_fields["extra_info"]` 中
 - 调用父类 `_score_trajectories` 走标准 reward worker 路径
 
-**基类推理模式 reward 传播**：`OpenAICompatibleAgentFramework._run_session` 在无 `reward_loop_worker_handles` 时，直接从 `trajectory.reward_info` 提取 `reward_score` 设置到 trajectory 上，确保推理模式下 reward 分数能正确写入 TQ store。
+**统一 reward 路径**：训练和推理均通过 `RewardLoopWorker` → `NaiveRewardManager` → `compute_score` 计算 reward。基类不再跳过 in-process reward，`SWEAgentFramework._score_trajectories` 将 runner 传来的 `reward_info` 合并到 `extra_info`，由 `compute_score` 读取 `extra_info["reward_score"]` 产生最终分数。推理模式由 `parallel_infer.py` 创建 `RewardLoopWorker` Ray actor 实现。
 
 ### 3.2 `agent_runner.py` — Uniagent Runner
 
@@ -141,6 +141,7 @@ uni_agent.interaction.tools_manager   → ToolsManager, ToolsManagerConfig
 
 verl.tools.tool_registry              → initialize_tools_from_config
 verl.utils.dataset.rl_dataset         → RLHFDataset (SWEBenchDataset 的基类)
+verl.experimental.reward_loop         → RewardLoopWorker, RewardLoopManager
 ```
 
 ## 六、数据流
