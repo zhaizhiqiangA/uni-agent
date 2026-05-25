@@ -25,6 +25,8 @@
       TQDM_DISABLE: "1"
       GIT_PAGER: "cat"
 
+  tool_parser: qwen3_coder
+
   tools:
     - name: str_replace_editor
     - name: execute_bash

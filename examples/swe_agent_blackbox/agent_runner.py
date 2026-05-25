@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import threading
 from typing import Any
 from uuid import uuid4
@@ -31,9 +32,15 @@ _port_lock = threading.Lock()
 def _allocate_port() -> int:
     global _port_counter
     with _port_lock:
-        port = _port_counter
-        _port_counter += 1
-    return port
+        while True:
+            port = _port_counter
+            _port_counter += 1
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                try:
+                    sock.bind(("127.0.0.1", port))
+                    return port
+                except OSError:
+                    continue
 
 
 # =====================================================================
@@ -50,25 +57,6 @@ def load_agent_config(path: str) -> dict[str, Any]:
     if isinstance(configs, list):
         return configs[0] if configs else {}
     return configs or {}
-
-
-def _detect_tool_parser(model_path: str) -> str | None:
-    """Detect tool parser from the model's tokenizer chat template."""
-    import json as _json
-
-    tok_config_path = os.path.join(os.path.expanduser(model_path), "tokenizer_config.json")
-    if not os.path.isfile(tok_config_path):
-        return None
-    with open(tok_config_path) as f:
-        cfg = _json.load(f)
-    template = cfg.get("chat_template", "")
-    if "tools" not in template:
-        return None
-    if "<function=" in template and "<parameter=" in template:
-        return "qwen3_coder"
-    if '"name"' in template:
-        return "hermes"
-    return None
 
 
 def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> AgentEnv:
@@ -148,15 +136,11 @@ async def swe_agent_runner(
         )
 
         tools_config = agent_config.get("tools", [])
-        parser_name = agent_config.get("tool_parser") or tools_kwargs.get("tool_parser")
-        if not parser_name:
-            model_path = tools_kwargs.get("model_path")
-            if model_path:
-                parser_name = _detect_tool_parser(model_path)
+        parser_name = agent_config.get("tool_parser") or tools_kwargs.get("tool_parser") or "qwen3_coder"
         tools_manager = ToolsManager(
             tools_manager_config=ToolsManagerConfig(
                 tools=[ToolConfig(name=t["name"]) for t in tools_config],
-                parser=parser_name or "qwen3_coder",
+                parser=parser_name,
             ),
         )
         model.set_tools_schemas(tools_manager.tools_schemas)

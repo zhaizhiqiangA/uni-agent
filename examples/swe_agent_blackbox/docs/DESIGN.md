@@ -91,6 +91,16 @@ YAML 配置
 
 **推理模式 reward 传播**：推理模式下无 `reward_loop_worker_handles`，框架在 `_run_session` 中直接从 `trajectory.reward_info`（由 agent_runner 通过 `complete_session` 传入）提取 `reward_score` 并设置到 trajectory 上。`parallel_infer.py` 从 TQ store 读取 `rm_scores[-1, -1]`（最后一个 trajectory 的最后一个 token 位置）获取 score。
 
+### 3.7 `dataset.py` — SWEBenchDataset
+
+继承 `RLHFDataset`，覆写 `__getitem__` 注入 verl 标准 reward 字段：
+- `data_source`：从 `extra_info.tools_kwargs.reward.name` 提取（如 `swe_bench`、`r2e_gym`）
+- `reward_model`：`{"ground_truth": {}}`（占位，实际 reward 由 agent_runner 计算）
+
+这些字段是 `NaiveRewardManager.run_single()` 的硬性要求（`non_tensor_batch["data_source"]` 和 `non_tensor_batch["reward_model"]["ground_truth"]`），缺失会导致 KeyError。
+
+训练时通过 `swe_agent_blackbox.yaml` 的 `data.custom_cls` 配置指定使用此类；推理时 `parallel_infer.py` 的 `_inject_reward_fields` 实现相同逻辑。
+
 ## 四、配置文件
 
 ### `config/swe_agent_blackbox.yaml` — 训练配置
@@ -101,10 +111,11 @@ YAML 配置
 - `agent_runner_fqn`: `examples.swe_agent_blackbox.agent_runner.swe_agent_runner`
 - `reward.custom_reward_function`: 指向 `compute_score`
 - `algorithm.adv_estimator`: `grpo`
+- `data.custom_cls`: 指向 `SWEBenchDataset`，注入 `data_source` 和 `reward_model` 字段
 
 ### `config/agent_config.yaml` — Agent 配置
 
-定义 env、interaction、tools、tool_parser 等 agent 行为参数。
+定义 env、interaction、tools、tool_parser 等 agent 行为参数。`tool_parser` 字段指定工具调用解析器（默认 `qwen3_coder`）。
 
 ### `config/parallel_infer.yaml` — Hydra 推理配置
 
@@ -129,6 +140,7 @@ uni_agent.interaction.model           → OpenAICompatibleChatModel
 uni_agent.interaction.tools_manager   → ToolsManager, ToolsManagerConfig
 
 verl.tools.tool_registry              → initialize_tools_from_config
+verl.utils.dataset.rl_dataset         → RLHFDataset (SWEBenchDataset 的基类)
 ```
 
 ## 六、数据流
@@ -160,6 +172,7 @@ examples/swe_agent_blackbox/
 ├── agent_runner.py           # Uniagent runner
 ├── mini_swe_agent_runner.py  # Mini-swe-agent runner
 ├── reward.py                 # compute_score + evaluate_in_env
+├── dataset.py                # SWEBenchDataset (注入 verl 标准字段)
 ├── parallel_infer.py         # 推理入口（含数据集加载）
 ├── config/
 │   ├── swe_agent_blackbox.yaml  # 训练配置

@@ -73,6 +73,9 @@ data:
   val_batch_size: 8
   return_raw_chat: true
   trust_remote_code: true
+  custom_cls:
+    path: pkg://examples.swe_agent_blackbox.dataset
+    name: SWEBenchDataset
 
 algorithm:
   gamma: 1.0

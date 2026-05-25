@@ -32,7 +32,7 @@ from verl.workers.rollout.llm_server import LLMServerManager
 from uni_agent.trainer.gateway.runtime import GatewayServingRuntime
 
 from examples.swe_agent_blackbox.framework import SWEAgentFramework
-from examples.swe_agent_blackbox.agent_runner import swe_agent_runner, load_agent_config
+from examples.swe_agent_blackbox.agent_runner import swe_agent_runner
 from examples.swe_agent_blackbox.mini_swe_agent_runner import mini_swe_agent_runner
 
 logging.basicConfig(
@@ -76,6 +76,15 @@ def _remap_sample_images(sample: dict[str, Any]) -> dict[str, Any]:
     return sample
 
 
+def _inject_reward_fields(sample: dict[str, Any]) -> None:
+    """Inject verl-standard data_source and reward_model from extra_info.tools_kwargs.reward."""
+    extra_info = sample.get("extra_info", {})
+    tools_kwargs = extra_info.get("tools_kwargs", {})
+    reward_config = tools_kwargs.get("reward", {})
+    sample.setdefault("data_source", reward_config.get("name", "unknown"))
+    sample.setdefault("reward_model", {"ground_truth": {}})
+
+
 def load_swe_dataset(data_path: str | list[str], max_samples: int = -1) -> list[dict[str, Any]]:
     import pyarrow.parquet as pq
 
@@ -95,6 +104,7 @@ def load_swe_dataset(data_path: str | list[str], max_samples: int = -1) -> list[
 
     for i, sample in enumerate(samples):
         samples[i] = _remap_sample_images(sample)
+        _inject_reward_fields(samples[i])
 
     if max_samples > 0:
         samples = samples[:max_samples]
@@ -102,23 +112,6 @@ def load_swe_dataset(data_path: str | list[str], max_samples: int = -1) -> list[
 
     logger.info("Loaded %d samples from %s", len(samples), data_path)
     return samples
-
-
-def _detect_tool_parser(model_path: str) -> str | None:
-    """Detect tool parser from the model's tokenizer chat template."""
-    tok_config_path = os.path.join(os.path.expanduser(model_path), "tokenizer_config.json")
-    if not os.path.isfile(tok_config_path):
-        return None
-    with open(tok_config_path) as f:
-        cfg = json.load(f)
-    template = cfg.get("chat_template", "")
-    if "tools" not in template:
-        return None
-    if "<function=" in template and "<parameter=" in template:
-        return "qwen3_coder"
-    if '"name"' in template:
-        return "hermes"
-    return None
 
 
 class _MockReplayBuffer:
@@ -182,17 +175,16 @@ def run_inference(
     logger.info("Initializing LLM server manager...")
     llm_server_manager = LLMServerManager.create(config=config)
 
-    # 4. Detect tool parser and create GatewayServingRuntime
-    resolved_tool_parser = tool_parser or _detect_tool_parser(model_path)
-    logger.info("Using tool_parser=%r", resolved_tool_parser)
+    # 4. Create GatewayServingRuntime
+    logger.info("Using tool_parser=%r", tool_parser)
 
     llm_client = llm_server_manager.get_client()
     gateway_actor_kwargs = {
         "tokenizer": hf_tokenizer(os.path.expanduser(model_path)),
         "base_sampling_params": {"temperature": temperature, "top_p": top_p, "max_tokens": response_length},
     }
-    if resolved_tool_parser:
-        gateway_actor_kwargs["tool_parser_name"] = resolved_tool_parser
+    if tool_parser:
+        gateway_actor_kwargs["tool_parser_name"] = tool_parser
 
     gateway_runtime = GatewayServingRuntime(
         llm_client=llm_client,
@@ -212,8 +204,6 @@ def run_inference(
     )
 
     # 6. Build batch data and run
-    agent_cfg = load_agent_config(agent_config_path) if agent_config_path else {}
-
     _tools_kwargs_list = []
     for sample in samples:
         tk = (sample.get("extra_info") or {}).get("tools_kwargs", {})
@@ -230,6 +220,8 @@ def run_inference(
     td = TensorDict({"uid": uids, "global_steps": [0] * len(samples)}, batch_size=[len(samples)])
     _tu.assign_non_tensor_stack(td, "raw_prompt", raw_prompts)
     _tu.assign_non_tensor_stack(td, "tools_kwargs", _tools_kwargs_list)
+    _tu.assign_non_tensor_stack(td, "data_source", [sample["data_source"] for sample in samples])
+    _tu.assign_non_tensor_stack(td, "reward_model", [sample["reward_model"] for sample in samples])
 
     batch = DataProto(batch=td, meta_info={}).repeat(n)
 
