@@ -13,7 +13,7 @@ import torch
 from tensordict import TensorDict
 from tensordict.tensorclass import NonTensorData, NonTensorStack
 
-from verl.tools.utils.tool_registry import initialize_tools_from_config
+from verl.tools.tool_registry import initialize_tools_from_config
 from verl.utils.import_utils import load_class_from_fqn
 from verl.utils.transferqueue_utils import tq
 from verl.utils import tensordict_utils as tu
@@ -298,11 +298,13 @@ class OpenAICompatibleAgentFramework(AgentFramework):
             "num_failed_uids": 0,
             "failure_reasons": failure_reasons,
         }
-        for outcome in outcomes:
+        for i, outcome in enumerate(outcomes):
             if isinstance(outcome, Exception):
                 stats["num_failed_sessions"] += num_sessions
                 stats["num_failed_uids"] += 1
-                failure_reasons.append(_short_failure_reason(outcome))
+                reason = _short_failure_reason(outcome)
+                logger.error("prompt %d failed: %s", i, reason, exc_info=outcome)
+                failure_reasons.append(reason)
                 continue
             stats["num_success_sessions"] += outcome["num_success_sessions"]
             stats["num_failed_sessions"] += outcome["num_failed_sessions"]
@@ -438,6 +440,7 @@ class OpenAICompatibleAgentFramework(AgentFramework):
                 raw_prompt=raw_prompt,
                 session=session,
                 sample_index=sample_index,
+                session_runtime=self.session_runtime,
                 **(runner_kwargs or {}),
             )
             if self.wait_for_completion_after_agent_run:

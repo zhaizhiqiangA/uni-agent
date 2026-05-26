@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import replace
 from typing import Any
@@ -81,6 +82,31 @@ def _validate_tool_calls(tool_calls: Any) -> None:
             raise MalformedRequestError("tool_call.function must be an object")
 
 
+def _normalize_tool_call_arguments(tool_calls: list[dict]) -> list[dict]:
+    """Normalize tool_calls: parse function.arguments from JSON string to dict.
+
+    The OpenAI API spec defines arguments as a JSON string, but some chat
+    templates (e.g. Qwen) expect a dict for ``|items`` iteration.  This
+    function deep-copies tool_calls and converts arguments to dict when
+    possible, ensuring compatibility across template implementations.
+    """
+    result = []
+    for tc in tool_calls:
+        tc = dict(tc)
+        func = tc.get("function")
+        if isinstance(func, dict):
+            func = dict(func)
+            args = func.get("arguments")
+            if isinstance(args, str):
+                try:
+                    func["arguments"] = json.loads(args)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            tc["function"] = func
+        result.append(tc)
+    return result
+
+
 def _normalize_message(message: Any) -> dict[str, Any]:
     """Normalize a single message: validate structure, coerce types, filter to known fields.
 
@@ -105,7 +131,7 @@ def _normalize_message(message: Any) -> dict[str, Any]:
         normalized["name"] = name
     if "tool_calls" in message:
         _validate_tool_calls(message["tool_calls"])
-        normalized["tool_calls"] = list(message["tool_calls"])
+        normalized["tool_calls"] = _normalize_tool_call_arguments(list(message["tool_calls"]))
     if "tool_call_id" in message:
         normalized["tool_call_id"] = str(message["tool_call_id"])
     return normalized
@@ -529,6 +555,22 @@ class _GatewayActor:
         except MalformedRequestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        _log_trajectory = os.environ.get("SWE_AGENT_LOG_TRAJECTORY") == "1"
+        if _log_trajectory:
+            _msgs = request_context["messages"]
+            print(f"[gateway] session={session_id} request: {len(_msgs)} messages, "
+                  f"roles={[m['role'] for m in _msgs]}")
+            for _i, _m in enumerate(_msgs):
+                _tc = _m.get("tool_calls")
+                if _tc:
+                    _tc_names = [tc.get("function", {}).get("name", "?") for tc in _tc]
+                else:
+                    _tc_names = None
+                print(f"[gateway]   msg[{_i}] role={_m.get('role')} "
+                      f"tool_call_id={_m.get('tool_call_id', '')} "
+                      f"tool_calls={_tc_names} "
+                      f"content={str(_m.get('content', ''))[:300]}")
+
         async with session.generation_lock:
             if session.phase != SessionPhase.ACTIVE:
                 raise HTTPException(status_code=409, detail=f"Session {session_id} is {session.phase.value.lower()}")
@@ -596,13 +638,22 @@ class _GatewayActor:
                     allowed_request_sampling_param_keys=self._allowed_request_sampling_param_keys,
                 )
 
-            output = await self._backend.generate(
-                request_id=session_id,
-                prompt_ids=generation_context_ids,
-                sampling_params=sampling_params,
-                image_data=image_data,
-                video_data=video_data,
-            )
+            try:
+                output = await self._backend.generate(
+                    request_id=session_id,
+                    prompt_ids=generation_context_ids,
+                    sampling_params=sampling_params,
+                    image_data=image_data,
+                    video_data=video_data,
+                )
+            except Exception as e:
+                msg = str(e)
+                status_code = 400 if isinstance(e, ValueError) else 500
+                error_type = "invalid_request_error" if status_code == 400 else "internal_error"
+                raise HTTPException(
+                    status_code=status_code,
+                    detail={"error": {"message": msg, "type": error_type}},
+                )
 
             response_ids = list(output.token_ids)
             active_trajectory.response_ids.extend(response_ids)
@@ -613,6 +664,17 @@ class _GatewayActor:
             assistant_msg, finish_reason = await self._decode_response(
                 response_ids, tools=tools, stop_reason=output.stop_reason,
             )
+            if _log_trajectory:
+                _tc = assistant_msg.get("tool_calls")
+                if _tc:
+                    _tc_names = [tc.get("function", {}).get("name", "?") for tc in _tc]
+                else:
+                    _tc_names = None
+                print(f"[gateway] session={session_id} response: finish_reason={finish_reason} "
+                      f"tool_calls={_tc_names} "
+                      f"prompt_tokens={len(generation_context_ids)} "
+                      f"completion_tokens={len(response_ids)} "
+                      f"content={str(assistant_msg.get('content', ''))[:300]}")
             async with session.request_lock:
                 if session.phase != SessionPhase.ACTIVE:
                     raise HTTPException(
