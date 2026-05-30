@@ -129,3 +129,6 @@ logs
 log
 outputs
 .history
+
+# Superpowers brainstorming companion (temporary visual session files)
+.superpowers/
