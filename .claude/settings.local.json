@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip show *)",
+      "Bash(pip3 show *)",
+      "Read(//usr/**)",
+      "Bash(python3 *)",
+      "Bash(pip list *)",
+      "Bash(python *)",
+      "Bash(pip --version)",
+      "Bash(tee /tmp/tier1_test.log)"
+    ]
+  }
+}
