@@ -20,6 +20,7 @@ from uni_agent.interaction.model import OpenAICompatibleChatModel
 from uni_agent.interaction.tools_manager import ToolsManager, ToolsManagerConfig
 from uni_agent.tools import ToolConfig
 
+from examples.swe_agent_blackbox.dataset import extract_image
 from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,14 @@ def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> Ag
     env_override = dict(tools_kwargs.get("env", {}))
     if env_override:
         deployment = dict(env_config.get("deployment", {}))
+        # Flat format: image at env top level → move into deployment
         deployment.update({k: env_override.pop(k) for k in ["image", "command"] if k in env_override})
+        # Nested format: deployment dict in env_override → merge
+        nested_deployment = env_override.pop("deployment", None)
+        if isinstance(nested_deployment, dict):
+            deployment.update(nested_deployment)
         deployment.setdefault("type", "local")
-        # R2E images keep swerex in a dedicated venv; use absolute path
-        image = deployment.get("image", "")
+        image = extract_image(env_override) or deployment.get("image", "")
         if "r2e" in image.lower():
             deployment["command"] = (
                 "/opt/swerex-venv/bin/python3 -m swerex.server"

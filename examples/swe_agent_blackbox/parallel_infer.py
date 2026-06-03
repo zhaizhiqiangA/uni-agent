@@ -33,7 +33,11 @@ from uni_agent.trainer.gateway.runtime import GatewayServingRuntime
 
 from examples.swe_agent_blackbox.framework import SWEAgentFramework
 from examples.swe_agent_blackbox.agent_runner import swe_agent_runner
-from examples.swe_agent_blackbox.mini_swe_agent_runner import mini_swe_agent_runner
+
+try:
+    from examples.swe_agent_blackbox.mini_swe_agent_runner import mini_swe_agent_runner
+except ImportError:
+    mini_swe_agent_runner = None
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -143,6 +147,8 @@ def run_inference(
 ) -> dict[str, Any]:
     """Run parallel SWE-agent inference using the blackbox framework."""
     if runner == "mini_swe":
+        if mini_swe_agent_runner is None:
+            raise ImportError("mini-swe-agent is required for --runner mini_swe. Install with: pip install mini-swe-agent")
         _agent_runner = mini_swe_agent_runner
     else:
         _agent_runner = swe_agent_runner

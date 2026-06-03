@@ -3,6 +3,23 @@
 from verl.utils.dataset.rl_dataset import RLHFDataset
 
 
+def extract_image(env_config: dict) -> str:
+    """Extract Docker image from env config, supporting both flat and nested formats.
+
+    Flat:   env_config["image"]
+    Nested: env_config["deployment"]["image"]
+    """
+    image = env_config.get("image")
+    if image:
+        return image
+    deployment = env_config.get("deployment")
+    if isinstance(deployment, dict):
+        image = deployment.get("image")
+        if image:
+            return image
+    return ""
+
+
 class SWEBenchDataset(RLHFDataset):
 
     def __getitem__(self, item):

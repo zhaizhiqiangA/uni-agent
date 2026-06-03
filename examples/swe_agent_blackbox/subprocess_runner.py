@@ -10,10 +10,13 @@ compatible with its existing interface — no changes to any runner needed.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import ray
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,13 +88,18 @@ def remote_agent_run(
     stub_handle = _StubSessionHandle(session_id=session_id, base_url=base_url)
 
     async def _run():
-        await agent_runner(
-            raw_prompt=raw_prompt,
-            session=stub_handle,
-            sample_index=sample_index,
-            session_runtime=stub_runtime,
-            **runner_kwargs,
-        )
-        return stub_runtime.reward_info
+        try:
+            await agent_runner(
+                raw_prompt=raw_prompt,
+                session=stub_handle,
+                sample_index=sample_index,
+                session_runtime=stub_runtime,
+                **runner_kwargs,
+            )
+            return stub_runtime.reward_info
+        except Exception as e:
+            logger.error("remote_agent_run failed: session_id=%s, sample=%d, error=%s",
+                         session_id, sample_index, e, exc_info=True)
+            raise
 
     return asyncio.run(_run())

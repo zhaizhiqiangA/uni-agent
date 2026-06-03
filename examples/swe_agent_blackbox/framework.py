@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 from dataclasses import replace
 from uuid import uuid4
 
@@ -20,6 +21,8 @@ import ray
 from uni_agent.trainer.framework.framework import OpenAICompatibleAgentFramework
 
 from examples.swe_agent_blackbox.subprocess_runner import remote_agent_run
+
+logger = logging.getLogger(__name__)
 
 
 class SWEAgentFramework(OpenAICompatibleAgentFramework):
@@ -58,9 +61,9 @@ class SWEAgentFramework(OpenAICompatibleAgentFramework):
         session_id = session_id or f"session-{sample_index}-0-{uuid4().hex}"
         sample_fields = self._extract_sample_fields(prompts=prompts, sample_index=sample_index)
         session = await self.session_runtime.create_session(session_id)
+        agent_runner_fqn, resolved_kwargs = self._resolve_runner()
 
         try:
-            agent_runner_fqn, resolved_kwargs = self._resolve_runner()
             if runner_kwargs:
                 resolved_kwargs = {**resolved_kwargs, **runner_kwargs}
 
@@ -80,7 +83,9 @@ class SWEAgentFramework(OpenAICompatibleAgentFramework):
             )
             session_trajectories = await self.session_runtime.finalize_session(session_id)
 
-        except Exception:
+        except Exception as e:
+            logger.error("_run_session failed: session=%s, sample=%d, runner=%s: %s",
+                         session_id, sample_index, agent_runner_fqn, e, exc_info=True)
             await self.session_runtime.abort_session(session_id)
             raise
 

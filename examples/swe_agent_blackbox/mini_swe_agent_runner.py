@@ -17,6 +17,7 @@ from typing import Any
 
 from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
 
+from examples.swe_agent_blackbox.dataset import extract_image
 from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ async def mini_swe_agent_runner(
 
     # 2. Create DockerEnvironment
     env_config = tools_kwargs.get("env", {})
-    image = env_config.get("image", "")
+    image = extract_image(env_config)
     if not image:
         raise ValueError(f"No Docker image found in tools_kwargs.env for sample {sample_index}")
 
