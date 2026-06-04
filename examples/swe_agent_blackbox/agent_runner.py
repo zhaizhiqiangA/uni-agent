@@ -13,15 +13,14 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
+from examples.swe_agent_blackbox.dataset import extract_image
+from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 from uni_agent.interaction.env import AgentEnv, AgentEnvConfig
 from uni_agent.interaction.interaction import AgentInteraction
 from uni_agent.interaction.model import OpenAICompatibleChatModel
 from uni_agent.interaction.tools_manager import ToolsManager, ToolsManagerConfig
 from uni_agent.tools import ToolConfig
-
-from examples.swe_agent_blackbox.dataset import extract_image
-from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
+from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
 
 logger = logging.getLogger(__name__)
 if os.environ.get("DEBUG_MODE"):
@@ -57,20 +56,21 @@ def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> Ag
         if isinstance(nested_deployment, dict):
             deployment.update(nested_deployment)
         deployment.setdefault("type", "local")
-        image = extract_image(env_override) or deployment.get("image", "")
-        if "r2e" in image.lower():
-            deployment["command"] = (
-                "/opt/swerex-venv/bin/python3 -m swerex.server"
-                " --auth-token {token}"
-            )
-        else:
-            # SWE-bench images may lack swerex; install it before starting the server.
-            # pip package is "swe-rex", module is "swerex".
-            deployment["command"] = (
-                "/usr/bin/python3.10 -m pip install -q swe-rex"
-                " && exec /usr/bin/python3.10 -m swerex.server"
-                " --auth-token {token}"
-            )
+        # Only auto-generate the swerex start command for local Docker deployments.
+        # Remote deployments (openyuanrong, modal, vefaas, etc.) generate the command
+        # in their own deployment classes (e.g. YRDeployment._swerex_start_command).
+        if not deployment.get("command") and deployment.get("type") in ("local", None):
+            image = extract_image(env_override) or deployment.get("image", "")
+            if "r2e" in image.lower():
+                deployment["command"] = "/opt/swerex-venv/bin/python3 -m swerex.server --auth-token {token}"
+            else:
+                # SWE-bench images may lack swerex; install it before starting the server.
+                # pip package is "swe-rex", module is "swerex".
+                deployment["command"] = (
+                    "/usr/bin/python3.10 -m pip install -q swe-rex"
+                    " && exec /usr/bin/python3.10 -m swerex.server"
+                    " --auth-token {token}"
+                )
         env_config["deployment"] = deployment
         env_config.update(env_override)
     deployment = dict(env_config.get("deployment", {}))
@@ -101,16 +101,17 @@ async def swe_agent_runner(
     agent_config = load_agent_config(config_path)
     interaction_cfg = agent_config.get("interaction", {})
 
-    messages = (
-        list(raw_prompt) if isinstance(raw_prompt, list)
-        else [{"role": "user", "content": str(raw_prompt)}]
-    )
+    messages = list(raw_prompt) if isinstance(raw_prompt, list) else [{"role": "user", "content": str(raw_prompt)}]
 
     env = _create_agent_env(f"swe_bb_{sample_index}_{uuid4().hex[:8]}", tools_kwargs, agent_config)
     metadata, eval_timeout = build_reward_context(tools_kwargs)
 
     try:
-        logger.info("[sample %d] starting env, image=%s", sample_index, agent_config.get("env", {}).get("deployment", {}).get("image", "N/A"))
+        logger.info(
+            "[sample %d] starting env, image=%s",
+            sample_index,
+            agent_config.get("env", {}).get("deployment", {}).get("image", "N/A"),
+        )
         t0 = time.perf_counter()
         await env.start()
         logger.info("[sample %d] env started (%.1fs)", sample_index, time.perf_counter() - t0)
@@ -144,17 +145,29 @@ async def swe_agent_runner(
         )
 
         await env.install_tools(tools_manager.tools)
-        logger.info("[sample %d] running agent, max_turns=%d", sample_index, env_max_turns or interaction_cfg.get("max_turns", 100))
+        logger.info(
+            "[sample %d] running agent, max_turns=%d",
+            sample_index,
+            env_max_turns or interaction_cfg.get("max_turns", 100),
+        )
         t0 = time.perf_counter()
         result = await interaction.run()
         trajectory = result.get("trajectory", [])
-        logger.info("[sample %d] agent finished, %d steps (%.1fs)", sample_index, len(trajectory), time.perf_counter() - t0)
+        logger.info(
+            "[sample %d] agent finished, %d steps (%.1fs)", sample_index, len(trajectory), time.perf_counter() - t0
+        )
 
         # Evaluate reward in the same Docker env
         logger.info("[sample %d] evaluating reward, data_source=%s", sample_index, metadata["data_source"])
         t0 = time.perf_counter()
         score, eval_result = await evaluate_in_env(env, metadata, eval_timeout)
-        logger.info("[sample %d] reward done, score=%s, resolved=%s (%.1fs)", sample_index, score, eval_result.get("resolved"), time.perf_counter() - t0)
+        logger.info(
+            "[sample %d] reward done, score=%s, resolved=%s (%.1fs)",
+            sample_index,
+            score,
+            eval_result.get("resolved"),
+            time.perf_counter() - t0,
+        )
         logger.info("[sample %d] reward done, score=%s, resolved=%s", sample_index, score, eval_result.get("resolved"))
 
         # Signal completion with reward_info
