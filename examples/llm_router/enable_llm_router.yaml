@@ -1,0 +1,36 @@
+# @package _global_
+
+# Enable the Uni-Agent LLM router for agentic RL rollout traffic.
+#
+# Usage with existing verl trainer configs:
+#   hydra.searchpath=[pkg://verl.trainer.config,file://${oc.env:PWD}/examples] \
+#   +llm_router=enable_llm_router
+
+actor_rollout_ref:
+  rollout:
+    # vLLM prefix caching must be on for prefix-hit-aware routing to be useful.
+    enable_prefix_caching: true
+
+    # Custom Uni-Agent router config. The integration layer should read this
+    # block and replace verl's default GlobalRequestLoadBalancer when enabled.
+    llm_router:
+      enable: true
+      router_class: uni_agent.llm_router.KVCacheAwareLoadBalancer
+      policy:
+        gpu_memory_utilization_threshold: 0.90
+        max_sessions: 10000
+      kv_events:
+        subscriber_class: uni_agent.llm_router.vllm_events.VLLMKVEventSubscriber
+        publisher: zmq
+        endpoint: ${oc.env:LLM_ROUTER_KV_EVENTS_ENDPOINT,tcp://*:5557}
+        topic: ${oc.env:LLM_ROUTER_KV_EVENTS_TOPIC,""}
+
+    # Ask vLLM to publish KV-cache events so llm_router can track GPU prefix
+    # cache state for each rollout replica.
+    engine_kwargs:
+      vllm:
+        kv_events_config:
+          enable_kv_cache_events: true
+          publisher: zmq
+          endpoint: ${oc.env:LLM_ROUTER_KV_EVENTS_ENDPOINT,tcp://*:5557}
+          topic: ${oc.env:LLM_ROUTER_KV_EVENTS_TOPIC,""}
