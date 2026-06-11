@@ -50,6 +50,12 @@ def _create_sandbox(config: YRDeploymentConfig) -> Any:
         kwargs["name"] = config.name
     if config.cwd is not None:
         kwargs["cwd"] = config.cwd
+    if config.mounts:
+        if "mounts" in config.sandbox_kwargs:
+            raise ValueError("Use either YRDeploymentConfig.mounts or sandbox_kwargs['mounts'], not both")
+        from akernel_sdk import Mount
+
+        kwargs["mounts"] = [Mount(target=mount.target, image_url=mount.image_url) for mount in config.mounts]
     kwargs.update(config.sandbox_kwargs)
     kwargs["port_forwardings"] = [config.port]
 
@@ -66,6 +72,60 @@ def _start_swerex_via_port_forwarding(sandbox: Any, *, command: str, port: int, 
     handle = sandbox.commands.run(command, background=True)
     url = sandbox.get_port_url(port, internal=internal).replace("http://", "https://")
     return handle, url
+
+
+def _runtime_probe_enabled() -> bool:
+    value = os.getenv("OPENYUANRONG_RUNTIME_PROBE", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _probe_python_runtime(sandbox: Any) -> Any:
+    command = r"""
+set +e
+echo "=== task image python / swe-rex probe ==="
+
+probe_python() {
+    label="$1"
+    py="$2"
+    if command -v "$py" >/dev/null 2>&1; then
+        resolved="$(command -v "$py" 2>/dev/null)"
+    elif [ -x "$py" ]; then
+        resolved="$py"
+    else
+        echo "[$label] missing: $py"
+        return 0
+    fi
+
+    echo "[$label] executable: $resolved"
+    "$resolved" --version 2>&1 || true
+    "$resolved" - <<'PY' 2>&1 || true
+import importlib.util
+
+spec = importlib.util.find_spec("swerex")
+if spec is None:
+    print("swerex: missing")
+else:
+    import swerex
+
+    print(f"swerex: {spec.origin}")
+    print(f"swerex_version: {getattr(swerex, '__version__', 'unknown')}")
+PY
+}
+
+probe_python "task-python" "python"
+probe_python "task-python3" "python3"
+probe_python "task-/usr/bin/python3" "/usr/bin/python3"
+
+echo "=== mounted sidecar /opt/swe-rex python / swe-rex probe ==="
+probe_python "sidecar-/opt/swe-rex/bin/python" "/opt/swe-rex/bin/python"
+
+if [ -e /opt/swe-rex/bin/swerex-remote ]; then
+    echo "[sidecar-swerex-remote] exists: /opt/swe-rex/bin/swerex-remote"
+else
+    echo "[sidecar-swerex-remote] missing: /opt/swe-rex/bin/swerex-remote"
+fi
+"""
+    return sandbox.commands.run(command, timeout=60)
 
 
 def _kill_sandbox(sandbox: Any) -> None:
@@ -150,6 +210,19 @@ class YRDeployment(AbstractDeployment):
         self._sandbox = await loop.run_in_executor(None, _create_sandbox, self._config)
         elapsed_sandbox_creation = time.time() - t0
         self.logger.info(f"Sandbox {self._sandbox.sandbox_id} created in {elapsed_sandbox_creation:.2f}s")
+
+        if _runtime_probe_enabled():
+            self.logger.info(
+                "Probing task image and mounted sidecar runtime before starting swe-rex "
+                f"(image={self._config.image!r}, mounts={self._config.mounts!r})"
+            )
+            probe_result = await loop.run_in_executor(None, _probe_python_runtime, self._sandbox)
+            self.logger.info(
+                "OpenYuanRong runtime probe finished (exit_code=%s)\nstdout:\n%s\nstderr:\n%s",
+                getattr(probe_result, "exit_code", None),
+                getattr(probe_result, "stdout", ""),
+                getattr(probe_result, "stderr", ""),
+            )
 
         self._hooks.on_custom_step(f"Starting swerex on port {self._port} (background)")
         self._command_handle, self._runtime_url = await loop.run_in_executor(

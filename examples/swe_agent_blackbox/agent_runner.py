@@ -44,6 +44,32 @@ def load_agent_config(path: str) -> dict[str, Any]:
     return configs or {}
 
 
+def _mounted_swerex_command(runtime_target: str) -> str:
+    runtime_target = runtime_target.rstrip("/")
+    return (
+        f"{runtime_target}/bin/python {runtime_target}/bin/swerex-remote"
+        " --host 0.0.0.0 --port {port} --auth-token {token}"
+    )
+
+
+def _configure_openyuanrong_runtime_mount(deployment: dict[str, Any]) -> None:
+    """Inject a mounted SWE-ReX runtime image when configured through env vars."""
+    runtime_image = os.getenv("OPENYUANRONG_SWEREX_RUNTIME_IMAGE")
+    runtime_target = os.getenv("OPENYUANRONG_SWEREX_RUNTIME_TARGET", "/opt/swe-rex").rstrip("/")
+    if runtime_image:
+        mounts = list(deployment.get("mounts") or [])
+        for mount in mounts:
+            if isinstance(mount, dict) and mount.get("target") == runtime_target:
+                mount["image_url"] = runtime_image
+                break
+        else:
+            mounts.append({"target": runtime_target, "image_url": runtime_image})
+        deployment["mounts"] = mounts
+
+    if not deployment.get("command") and (runtime_image or deployment.get("mounts")):
+        deployment["command"] = _mounted_swerex_command(runtime_target)
+
+
 def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> AgentEnv:
     """Create AgentEnv from agent_config + per-sample tools_kwargs overrides."""
     env_config = dict(agent_config.get("env", {}))
@@ -58,22 +84,27 @@ def _create_agent_env(run_id: str, tools_kwargs: dict, agent_config: dict) -> Ag
             deployment.update(nested_deployment)
         deployment.setdefault("type", "local")
         image = extract_image(env_override) or deployment.get("image", "")
-        if "r2e" in image.lower():
-            deployment["command"] = (
-                "/opt/swerex-venv/bin/python3 -m swerex.server"
-                " --auth-token {token}"
-            )
-        else:
-            # SWE-bench images may lack swerex; install it before starting the server.
-            # pip package is "swe-rex", module is "swerex".
-            deployment["command"] = (
-                "/usr/bin/python3.10 -m pip install -q swe-rex"
-                " && exec /usr/bin/python3.10 -m swerex.server"
-                " --auth-token {token}"
-            )
+        if deployment["type"] == "openyuanrong":
+            _configure_openyuanrong_runtime_mount(deployment)
+        elif deployment["type"] == "local":
+            if "r2e" in image.lower():
+                deployment["command"] = (
+                    "/opt/swerex-venv/bin/python3 -m swerex.server"
+                    " --auth-token {token}"
+                )
+            else:
+                # SWE-bench images may lack swerex; install it before starting the server.
+                # pip package is "swe-rex", module is "swerex".
+                deployment["command"] = (
+                    "/usr/bin/python3.10 -m pip install -q swe-rex"
+                    " && exec /usr/bin/python3.10 -m swerex.server"
+                    " --auth-token {token}"
+                )
         env_config["deployment"] = deployment
         env_config.update(env_override)
     deployment = dict(env_config.get("deployment", {}))
+    if deployment.get("type") == "openyuanrong":
+        _configure_openyuanrong_runtime_mount(deployment)
     env_config["deployment"] = deployment
     return AgentEnv(run_id=run_id, env_config=AgentEnvConfig(**env_config))
 
@@ -106,11 +137,17 @@ async def swe_agent_runner(
         else [{"role": "user", "content": str(raw_prompt)}]
     )
 
-    env = _create_agent_env(f"swe_bb_{sample_index}_{uuid4().hex[:8]}", tools_kwargs, agent_config)
     metadata, eval_timeout = build_reward_context(tools_kwargs)
+    task_image = extract_image((tools_kwargs.get("env") or {}))
+    env = _create_agent_env(f"swe_bb_{sample_index}_{uuid4().hex[:8]}", tools_kwargs, agent_config)
 
     try:
-        logger.info("[sample %d] starting env, image=%s", sample_index, agent_config.get("env", {}).get("deployment", {}).get("image", "N/A"))
+        logger.info(
+            "[sample %d] starting env, data_source=%s, task_image=%s",
+            sample_index,
+            metadata["data_source"],
+            task_image or "N/A",
+        )
         t0 = time.perf_counter()
         await env.start()
         logger.info("[sample %d] env started (%.1fs)", sample_index, time.perf_counter() - t0)
