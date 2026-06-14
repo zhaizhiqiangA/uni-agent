@@ -153,6 +153,17 @@ class ModalDeploymentConfig(BaseModel):
         return ModalDeployment.from_config(self, run_id)
 
 
+class YRMountConfig(BaseModel):
+    """Rootfs image mount for YR (AKernel) sandboxes."""
+
+    target: str
+    """Mount point inside the sandbox."""
+    image_url: str
+    """OCI image URL whose rootfs should be mounted at ``target``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class YRDeploymentConfig(BaseModel):
     """Configuration for YR (AKernel) remote sandbox deployment."""
 
@@ -190,6 +201,8 @@ class YRDeploymentConfig(BaseModel):
     """Verify TLS when connecting to the port-forwarded https URL (self-signed clusters often need False)."""
     sandbox_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Extra keyword arguments passed to akernel_sdk.Sandbox."""
+    mounts: list[YRMountConfig] = Field(default_factory=list)
+    """OCI image rootfs mounts passed to akernel_sdk.Sandbox as Mount objects."""
 
     type: Literal["openyuanrong"] = "openyuanrong"
     """Discriminator for (de)serialization/CLI. Do not change."""
