@@ -1,0 +1,40 @@
+- name: swe_agent
+
+  _target_: uni_agent.agent_loop.UniAgentLoop
+  concurrency: 64
+  log_dir: /tmp/swebench_qwen3_coder
+  mask_abnormal_exit_traj: false
+
+  interaction:
+    action_timeout: 300
+    max_turns: 100
+
+  env:
+    deployment:
+      type: openyuanrong
+      timeout: 600
+      startup_timeout: 600
+      # YR connection credentials — set these before running.
+      # Can also be provided via OPENYUANRONG_SERVER_ADDRESS / OPENYUANRONG_TOKEN env vars.
+      server_address: REPLACE_ME
+      token: REPLACE_ME
+      # Shell command prepended to swerex startup inside the sandbox.
+      env_prepare_cmd: "unset http_proxy && unset https_proxy && unset no_proxy && pip config set global.index-url https://repo.huaweicloud.com/repository/pypi/simple && pip config set install.trusted-host repo.huaweicloud.com && python3 -m pip install -q swe-rex"
+    env_variables:
+      PIP_PROGRESS_BAR: "off"
+      PIP_CACHE_DIR: "~/.cache/pip"
+      PAGER: "cat"
+      MANPAGER: "cat"
+      LESS: "-R"
+      TQDM_DISABLE: "1"
+      GIT_PAGER: "cat"
+
+  tool_parser: qwen3_coder
+
+  tools:
+    - name: str_replace_editor
+    - name: execute_bash
+    - name: submit
+
+  reward:
+    eval_timeout: 600
