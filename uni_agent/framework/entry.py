@@ -104,6 +104,7 @@ class AgentFrameworkRolloutAdapter:
         # Driver-owned so the gateway actors outlive the framework worker; also
         # the handle through which teardown can be driven once a call site exists.
         self.gateway_manager = None
+        self.replay_buffer = None
 
     @classmethod
     def create(
@@ -113,6 +114,8 @@ class AgentFrameworkRolloutAdapter:
         llm_client,
         teacher_client=None,
         reward_loop_worker_handles=None,
+        # TODO: remove this when PR6710 (V1 structure) is applied.
+        replay_buffer=None,
         **_,
     ) -> AgentFrameworkRolloutAdapter:
         if teacher_client is not None:
@@ -131,6 +134,7 @@ class AgentFrameworkRolloutAdapter:
         instance = cls()
         instance.framework_worker = framework_worker
         instance.gateway_manager = gateway_manager
+        instance.replay_buffer = replay_buffer
         return instance
 
     def generate_sequences(self, prompts) -> None:
@@ -138,5 +142,23 @@ class AgentFrameworkRolloutAdapter:
         if self.framework_worker is None:
             raise RuntimeError("framework must be initialized before generate_sequences")
 
+        # Compatibility for pre-V1 main_ppo_sync.py: prompt registration lived
+        # in the in-process framework via the trainer-owned ReplayBuffer. The
+        # remote worker cannot mutate that local object, so the adapter keeps
+        # the old marker behavior before submitting rollout work.
+        # TODO: remove this when PR6710 (V1 structure) is applied.
+        if self.replay_buffer is not None:
+            global_steps = prompts["global_steps"]
+            partition_id = "val" if "validate" in prompts.keys() else "train"
+            self.replay_buffer.add(
+                partition_id,
+                {str(uid): {"global_steps": global_steps, "status": "running"} for uid in prompts["uid"]},
+            )
+
         self.framework_worker.generate_sequences.remote(prompts)
+        return None
+
+    async def generate_sequences_single(self, prompts) -> None:
+        """Fully-async TQ compatibility entry; rollout results are written to TransferQueue."""
+        self.generate_sequences(prompts)
         return None

@@ -14,15 +14,15 @@ import os
 import time
 from pathlib import Path
 
-from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
+import httpx
+
+from uni_agent.gateway.session import SessionHandle
 
 from examples.swe_agent_blackbox.dataset import extract_image
 from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 from examples.swe_agent_blackbox.sandbox import CommandResult, YRSandbox, extract_upstream, rewrite_gateway_url
 
 logger = logging.getLogger(__name__)
-if os.environ.get("DEBUG_MODE"):
-    logger.setLevel(logging.DEBUG)
 
 MINI_SWE_AGENT_IMAGE = os.environ.get("MINI_SWE_AGENT_IMAGE", "swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent-tool:latest")
 
@@ -81,7 +81,6 @@ async def mini_swe_agent_runner(
     raw_prompt,
     session: SessionHandle,
     sample_index: int,
-    session_runtime: SessionRuntime,
     tools_kwargs: dict | None = None,
     **kwargs,
 ) -> None:
@@ -92,7 +91,7 @@ async def mini_swe_agent_runner(
         2. Pipe task config to run_agent.py via stdin
         3. Parse agent result from stdout
         4. Evaluate reward in the same sandbox
-        5. Complete session with reward_info
+        5. Post reward_info for the framework reward path
     """
     tools_kwargs = tools_kwargs or {}
     logger.info("mini_swe_agent_runner called, sample_index=%d", sample_index)
@@ -170,7 +169,11 @@ async def mini_swe_agent_runner(
         )
 
         reward_info = {"reward_score": score, **eval_result}
-        await session_runtime.complete_session(session.session_id, reward_info=reward_info)
+        if not session.reward_info_url:
+            raise ValueError(f"reward_info_url is empty for session {session.session_id}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(session.reward_info_url, json={"reward_info": reward_info})
+            response.raise_for_status()
 
     except Exception as e:
         logger.warning("Mini-swe-agent runner failed for sample %d (sandbox_id=%s): %s", sample_index, sandbox_id, e)

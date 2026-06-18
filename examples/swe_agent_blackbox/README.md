@@ -23,7 +23,7 @@ The tool image uses [python-build-standalone](https://github.com/astral-sh/pytho
   │
   ├── _parse_agent_result(stdout)
   ├── SandboxEnvForReward(sandbox) → evaluate_in_env()
-  └── session_runtime.complete_session(reward_info)
+  └── POST session.reward_info_url
 ```
 
 ## Prerequisites
@@ -102,4 +102,3 @@ bash examples/swe_agent_blackbox/scripts/run_train_megatron_async.sh
 |----------|---------|-------------|
 | `SWE_AGENT_MAX_TURNS` | `100` | Max agent steps |
 | `MINI_SWE_AGENT_IMAGE` | `swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent-tool:latest` | Sidecar tool image |
-| `DEBUG_MODE` | (unset) | Set to 1 to enable debug logging |

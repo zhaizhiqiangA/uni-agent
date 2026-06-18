@@ -2,7 +2,7 @@
 
 Uses white-box interaction components (AgentInteraction, OpenAICompatibleChatModel,
 ToolsManager) with gateway-based LLM routing. Computes reward in-process and
-passes it via the gateway's complete_session endpoint.
+posts it to the gateway's reward_info endpoint.
 """
 
 from __future__ import annotations
@@ -13,7 +13,9 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
+import httpx
+
+from uni_agent.gateway.session import SessionHandle
 from uni_agent.interaction.env import AgentEnv, AgentEnvConfig
 from uni_agent.interaction.interaction import AgentInteraction
 from uni_agent.interaction.model import OpenAICompatibleChatModel
@@ -24,8 +26,6 @@ from examples.swe_agent_blackbox.dataset import extract_image
 from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
 
 logger = logging.getLogger(__name__)
-if os.environ.get("DEBUG_MODE"):
-    logger.setLevel(logging.DEBUG)
 
 
 # =====================================================================
@@ -88,7 +88,6 @@ async def swe_agent_runner(
     raw_prompt,
     session: SessionHandle,
     sample_index: int,
-    session_runtime: SessionRuntime,
     tools_kwargs: dict | None = None,
     agent_config_path: str | None = None,
     **kwargs,
@@ -157,9 +156,12 @@ async def swe_agent_runner(
         logger.info("[sample %d] reward done, score=%s, resolved=%s (%.1fs)", sample_index, score, eval_result.get("resolved"), time.perf_counter() - t0)
         logger.info("[sample %d] reward done, score=%s, resolved=%s", sample_index, score, eval_result.get("resolved"))
 
-        # Signal completion with reward_info
         reward_info = {"reward_score": score, **eval_result}
-        await session_runtime.complete_session(session.session_id, reward_info=reward_info)
+        if not session.reward_info_url:
+            raise ValueError(f"reward_info_url is empty for session {session.session_id}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(session.reward_info_url, json={"reward_info": reward_info})
+            response.raise_for_status()
 
     except Exception as e:
         logger.warning("Agent runner failed for sample %d: %s", sample_index, e)

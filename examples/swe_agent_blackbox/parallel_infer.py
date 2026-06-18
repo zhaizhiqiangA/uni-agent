@@ -1,6 +1,6 @@
 """Parallel inference runner for the blackbox SWE-agent recipe (v2).
 
-Creates an LLM server, GatewayServingRuntime, and SWEAgentFramework,
+Creates an LLM server, GatewayManager, and SWEAgentFramework,
 then runs agent sessions in parallel and reports resolve rate.
 
 Usage (CLI):
@@ -29,10 +29,10 @@ from verl.utils import hf_tokenizer
 from verl.utils.transferqueue_utils import tq as _tq_mock
 from verl.workers.rollout.llm_server import LLMServerManager
 
-from uni_agent.trainer.gateway.runtime import GatewayServingRuntime
+from uni_agent.gateway.config import GatewayActorConfig
+from uni_agent.gateway.manager import GatewayManager
 
 from examples.swe_agent_blackbox.framework import SWEAgentFramework
-from examples.swe_agent_blackbox.agent_runner import swe_agent_runner
 
 try:
     from examples.swe_agent_blackbox.mini_swe_agent_runner import mini_swe_agent_runner
@@ -118,13 +118,6 @@ def load_swe_dataset(data_path: str | list[str], max_samples: int = -1) -> list[
     return samples
 
 
-class _MockReplayBuffer:
-    """Minimal replay buffer for inference mode (no actual training)."""
-
-    def add(self, partition_id, items):
-        pass
-
-
 def run_inference(
     *,
     model_path: str,
@@ -140,7 +133,6 @@ def run_inference(
     n_gpus_per_node: int = 8,
     tensor_parallel_size: int = 4,
     gateway_count: int = 1,
-    completion_timeout: float = 600.0,
     tool_parser: str | None = None,
     agent_config_path: str | None = None,
     runner: str = "uniagent",
@@ -149,9 +141,9 @@ def run_inference(
     if runner == "mini_swe":
         if mini_swe_agent_runner is None:
             raise ImportError("mini-swe-agent is required for --runner mini_swe. Install with: pip install mini-swe-agent")
-        _agent_runner = mini_swe_agent_runner
+        runner_fqn = "examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner"
     else:
-        _agent_runner = swe_agent_runner
+        runner_fqn = "examples.swe_agent_blackbox.agent_runner.swe_agent_runner"
 
     if not ray.is_initialized():
         ray.init()
@@ -181,21 +173,22 @@ def run_inference(
     logger.info("Initializing LLM server manager...")
     llm_server_manager = LLMServerManager.create(config=config)
 
-    # 4. Create GatewayServingRuntime
+    # 4. Create GatewayManager
     logger.info("Using tool_parser=%r", tool_parser)
 
     llm_client = llm_server_manager.get_client()
-    gateway_actor_kwargs = {
-        "tokenizer": hf_tokenizer(os.path.expanduser(model_path)),
-        "base_sampling_params": {"temperature": temperature, "top_p": top_p, "max_tokens": response_length},
-    }
-    if tool_parser:
-        gateway_actor_kwargs["tool_parser_name"] = tool_parser
+    gateway_actor_config = GatewayActorConfig(
+        tokenizer=hf_tokenizer(os.path.expanduser(model_path)),
+        tool_parser_name=tool_parser,
+        prompt_length=prompt_length,
+        response_length=response_length,
+        base_sampling_params={"temperature": temperature, "top_p": top_p, "max_tokens": response_length},
+    )
 
-    gateway_runtime = GatewayServingRuntime(
+    gateway_manager = GatewayManager(
         llm_client=llm_client,
         gateway_count=gateway_count,
-        gateway_actor_kwargs=gateway_actor_kwargs,
+        gateway_actor_config=gateway_actor_config,
     )
 
     # 5. Create RewardLoopWorker for compute_score
@@ -203,14 +196,29 @@ def run_inference(
     reward_worker = ray.remote(RewardLoopWorker).remote(config, None)
 
     # 6. Create framework
-    framework = SWEAgentFramework(
-        session_runtime=gateway_runtime,
-        agent_runner=_agent_runner,
-        replay_buffer=_MockReplayBuffer(),
-        rollout_config={"n": n, "val_kwargs": {"n": n}},
-        completion_timeout=completion_timeout,
-        wait_for_completion_after_agent_run=True,
-        max_concurrent_sessions=2,
+    from omegaconf import OmegaConf
+
+    OmegaConf.set_struct(config.actor_rollout_ref.rollout, False)
+    config.actor_rollout_ref.rollout.custom = {
+        "agent_framework": {
+            "gateway_count": gateway_count,
+            "agent_runners": {
+                "swe_agent": {
+                    "runner_fqn": runner_fqn,
+                    "dispatch_mode": "ray_task",
+                    "max_concurrent_sessions": 2,
+                    "runner_kwargs": {
+                        "agent_config_path": agent_config_path or "examples/swe_agent_blackbox/config/agent_config.yaml",
+                    },
+                },
+            },
+        },
+    }
+    OmegaConf.set_struct(config.actor_rollout_ref.rollout, True)
+
+    framework = SWEAgentFramework.from_config(
+        config=config,
+        gateway_manager=gateway_manager,
         reward_loop_worker_handles=[reward_worker],
     )
 
@@ -293,7 +301,7 @@ def run_inference(
     )
 
     # 8. Cleanup
-    asyncio.run(gateway_runtime.shutdown())
+    asyncio.run(gateway_manager.shutdown())
 
     return {
         "stats": stats,

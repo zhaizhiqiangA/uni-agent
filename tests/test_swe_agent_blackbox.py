@@ -114,6 +114,8 @@ class TestRewardSpecRegistry:
     def test_spec_loadable(self, data_source):
         from examples.swe_agent_blackbox.reward import _get_reward_spec
 
+        if data_source == "r2e_gym":
+            pytest.importorskip("r2egym")
         cls = _get_reward_spec(data_source)
         assert cls is not None
 
@@ -128,7 +130,7 @@ class TestRewardInfoInjection:
     """VERIFICATION #16: reward_info → extra_info injection chain."""
 
     def test_injects_reward_info(self):
-        from uni_agent.trainer.framework.types import Trajectory
+        from uni_agent.gateway.session import Trajectory
 
         traj = [Trajectory(
             prompt_ids=[], response_ids=[], response_mask=[],
@@ -145,7 +147,7 @@ class TestRewardInfoInjection:
         assert merged["data_source"] == "swe_bench"
 
     def test_no_reward_info_no_crash(self):
-        from uni_agent.trainer.framework.types import Trajectory
+        from uni_agent.gateway.session import Trajectory
 
         traj = [Trajectory(prompt_ids=[], response_ids=[], response_mask=[], reward_info={})]
         assert not traj[-1].reward_info
@@ -219,6 +221,12 @@ class TestHydraConfig:
         with initialize_config_dir(config_dir=config_dir, version_base=None):
             cfg = compose(config_name="swe_agent_blackbox")
         assert cfg.algorithm.adv_estimator == "grpo"
+        assert cfg.actor_rollout_ref.rollout.agent.agent_loop_manager_class == (
+            "uni_agent.framework.entry.AgentFrameworkRolloutAdapter"
+        )
+        runner_cfg = cfg.actor_rollout_ref.rollout.custom.agent_framework.agent_runners.swe_agent
+        assert runner_cfg.runner_fqn == "examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner"
+        assert runner_cfg.dispatch_mode == "ray_task"
 
     def test_parallel_infer_yaml(self):
         from hydra import compose, initialize_config_dir
@@ -233,7 +241,7 @@ class TestFQNReferences:
     """VERIFICATION #20–22: FQN references in training config."""
 
     def test_agent_framework_rollout_adapter(self):  # #20
-        from uni_agent.trainer.framework.entry import AgentFrameworkRolloutAdapter
+        from uni_agent.framework.entry import AgentFrameworkRolloutAdapter
         assert AgentFrameworkRolloutAdapter is not None
 
     def test_framework_class_fqn(self):  # #21
@@ -253,6 +261,7 @@ class TestFQNReferences:
 class TestDatasetLoading:
     """VERIFICATION #42–44: parquet loading + image remapping."""
 
+    @pytest.mark.skipif(not os.path.exists("/tmp/swe_local_8.parquet"), reason="/tmp/swe_local_8.parquet not found")
     def test_swe_bench_sample(self):  # #42 (sample)
         from examples.swe_agent_blackbox.parallel_infer import load_swe_dataset
 
@@ -266,6 +275,10 @@ class TestDatasetLoading:
             assert tk["reward"]["name"] == "swe_bench"
             assert ":latest" in tk["env"]["image"]
 
+    @pytest.mark.skipif(
+        not os.path.exists("/home/datasets/swe_bench_verified.parquet"),
+        reason="/home/datasets/swe_bench_verified.parquet not found",
+    )
     def test_swe_bench_full(self):  # #42 (full)
         from examples.swe_agent_blackbox.parallel_infer import load_swe_dataset
 
@@ -276,6 +289,7 @@ class TestDatasetLoading:
             assert tk["reward"]["name"] == "swe_bench"
             assert ":latest" in tk["env"]["image"]
 
+    @pytest.mark.skipif(not os.path.exists("/tmp/r2e_local_8.parquet"), reason="/tmp/r2e_local_8.parquet not found")
     def test_r2e_gym_sample(self):  # #44 (sample)
         from examples.swe_agent_blackbox.parallel_infer import load_swe_dataset
 
@@ -286,12 +300,14 @@ class TestDatasetLoading:
             assert tk["reward"]["name"] == "r2e_gym"
             assert ":latest" in tk["env"]["image"]
 
+    @pytest.mark.skipif(not os.path.exists("/tmp/swe_local_8.parquet"), reason="/tmp/swe_local_8.parquet not found")
     def test_max_samples_limit(self):
         from examples.swe_agent_blackbox.parallel_infer import load_swe_dataset
 
         samples = load_swe_dataset("/tmp/swe_local_8.parquet", max_samples=3)
         assert len(samples) == 3
 
+    @pytest.mark.skipif(not os.path.exists("/tmp/swe_local_8.parquet"), reason="/tmp/swe_local_8.parquet not found")
     def test_max_samples_negative_returns_all(self):
         from examples.swe_agent_blackbox.parallel_infer import load_swe_dataset
 
@@ -305,8 +321,10 @@ class TestDatasetLoading:
 
 
 @pytest.mark.skipif(
-    not os.path.isdir("/data1/models/Qwen/Qwen3.5-4B"),
-    reason="Qwen3.5-4B model not found",
+    not os.path.isdir("/data1/models/Qwen/Qwen3.5-4B")
+    or not os.path.exists("/tmp/swe_local_8.parquet")
+    or not os.path.exists("/tmp/r2e_local_8.parquet"),
+    reason="Qwen3.5-4B model or local SWE/R2E sample parquet files not found",
 )
 class TestInferenceEndToEnd:
     """VERIFICATION #36–38: inference end-to-end with GPU."""

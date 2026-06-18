@@ -1,5 +1,5 @@
 # Megatron sync training config for the blackbox SWE-agent recipe.
-# Uses main_ppo_sync + Megatron backend, same blackbox infrastructure as FSDP.
+# Uses main_ppo_sync + Megatron backend, same top-level framework stack as FSDP.
 #
 # Entry point: python3 -m verl.trainer.main_ppo_sync
 
@@ -42,17 +42,18 @@ actor_rollout_ref:
 
     agent:
       num_workers: 8
-      agent_loop_manager_class: uni_agent.trainer.framework.entry.AgentFrameworkRolloutAdapter
+      agent_loop_manager_class: uni_agent.framework.entry.AgentFrameworkRolloutAdapter
 
     custom:
       agent_framework:
-        framework_class_fqn: examples.swe_agent_blackbox.framework.SWEAgentFramework
-        agent_runner_fqn: examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner
         gateway_count: 1
-        completion_timeout_seconds: 600
-        max_concurrent_sessions: 32
-        agent_runner_kwargs:
-          agent_config_path: examples/swe_agent_blackbox/config/agent_config.yaml
+        agent_runners:
+          swe_agent:
+            runner_fqn: examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner
+            dispatch_mode: ray_task
+            max_concurrent_sessions: 32
+            runner_kwargs:
+              agent_config_path: examples/swe_agent_blackbox/config/agent_config.yaml
 
   actor:
     use_dynamic_bsz: true

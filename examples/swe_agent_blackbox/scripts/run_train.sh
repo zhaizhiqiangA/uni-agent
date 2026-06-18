@@ -39,7 +39,6 @@ TEMPERATURE="${TEMPERATURE:-1.0}"
 # ── Agent parameters ─────────────────────────────────────────────────────
 MAX_TURNS="${MAX_TURNS:-100}"
 AGENT_CONFIG_PATH="${AGENT_CONFIG_PATH:-examples/swe_agent_blackbox/config/agent_config.yaml}"
-COMPLETION_TIMEOUT="${COMPLETION_TIMEOUT:-600}"
 
 # ── Logging ──────────────────────────────────────────────────────────────
 PROJECT_NAME="${PROJECT_NAME:-swe_agent_blackbox}"
@@ -91,6 +90,5 @@ python3 -m verl.trainer.main_ppo_sync \
     trainer.test_freq=${TEST_FREQ} \
     trainer.project_name=${PROJECT_NAME} \
     trainer.experiment_name=${EXPERIMENT_NAME} \
-    actor_rollout_ref.rollout.custom.agent_framework.agent_runner_kwargs.agent_config_path="${AGENT_CONFIG_PATH}" \
-    actor_rollout_ref.rollout.custom.agent_framework.completion_timeout_seconds=${COMPLETION_TIMEOUT} \
+    actor_rollout_ref.rollout.custom.agent_framework.agent_runners.swe_agent.runner_kwargs.agent_config_path="${AGENT_CONFIG_PATH}" \
     "$@"

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Megatron + TQ fully-async training for the blackbox SWE-agent recipe.
 #
-# Uses FullyAsyncAgentFrameworkRolloutAdapter + SWEAgentFramework with Megatron backend.
-# Data flows through TransferQueue (zero-copy) with ReplayBuffer flow control.
+# Uses AgentFrameworkRolloutAdapter + the top-level framework with Megatron backend.
+# Data flows through TransferQueue; the adapter can run without a ReplayBuffer.
 #
 # Usage:
 #   bash examples/swe_agent_blackbox/scripts/run_train_megatron_async.sh
@@ -51,7 +51,6 @@ PPO_MINI_BATCH_SIZE="${PPO_MINI_BATCH_SIZE:-16}"
 # ── Agent parameters ─────────────────────────────────────────────────────
 MAX_TURNS="${MAX_TURNS:-100}"
 AGENT_CONFIG_PATH="${AGENT_CONFIG_PATH:-examples/swe_agent_blackbox/config/agent_config.yaml}"
-COMPLETION_TIMEOUT="${COMPLETION_TIMEOUT:-600}"
 
 # ── OpenYuanRong (YR remote sandbox) ─────────────────────────────────────
 OPENYUANRONG_SERVER_ADDRESS="${OPENYUANRONG_SERVER_ADDRESS:-}"
@@ -128,8 +127,7 @@ ray job submit --no-wait --working-dir="${WORKING_DIR}" "${RUNTIME_ENV_ARGS[@]}"
     actor_rollout_ref.rollout.tensor_model_parallel_size=${GEN_TP} \
     actor_rollout_ref.rollout.gpu_memory_utilization=${ROLLOUT_GPU_MEM_UTIL} \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${MAX_TURNS} \
-    actor_rollout_ref.rollout.custom.agent_framework.completion_timeout_seconds=${COMPLETION_TIMEOUT} \
-    actor_rollout_ref.rollout.custom.agent_framework.agent_runner_kwargs.agent_config_path="${AGENT_CONFIG_PATH}" \
+    actor_rollout_ref.rollout.custom.agent_framework.agent_runners.swe_agent.runner_kwargs.agent_config_path="${AGENT_CONFIG_PATH}" \
     actor_rollout_ref.actor.clip_ratio_low=${CLIP_RATIO_LOW} \
     actor_rollout_ref.actor.clip_ratio_high=${CLIP_RATIO_HIGH} \
     actor_rollout_ref.actor.ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE} \

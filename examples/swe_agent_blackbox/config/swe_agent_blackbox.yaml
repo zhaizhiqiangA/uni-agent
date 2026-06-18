@@ -1,5 +1,5 @@
 # PPO trainer config for the blackbox SWE-agent recipe (v2).
-# Uses the generic AgentFrameworkRolloutAdapter + SWEAgentFramework subclass.
+# Uses the generic AgentFrameworkRolloutAdapter + top-level agent framework.
 
 hydra:
   searchpath:
@@ -40,17 +40,18 @@ actor_rollout_ref:
 
     agent:
       num_workers: 8
-      agent_loop_manager_class: uni_agent.trainer.framework.entry.AgentFrameworkRolloutAdapter
+      agent_loop_manager_class: uni_agent.framework.entry.AgentFrameworkRolloutAdapter
 
     custom:
       agent_framework:
-        framework_class_fqn: examples.swe_agent_blackbox.framework.SWEAgentFramework
-        agent_runner_fqn: examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner
         gateway_count: 1
-        completion_timeout_seconds: 600
-        max_concurrent_sessions: 32
-        agent_runner_kwargs:
-          agent_config_path: examples/swe_agent_blackbox/config/agent_config.yaml
+        agent_runners:
+          swe_agent:
+            runner_fqn: examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner
+            dispatch_mode: ray_task
+            max_concurrent_sessions: 32
+            runner_kwargs:
+              agent_config_path: examples/swe_agent_blackbox/config/agent_config.yaml
 
   actor:
     use_dynamic_bsz: true
@@ -93,7 +94,7 @@ algorithm:
 
 reward:
   custom_reward_function:
-    path: pkg://examples/swe_agent_blackbox.reward
+    path: pkg://examples.swe_agent_blackbox.reward
     name: compute_score
 
 trainer:
