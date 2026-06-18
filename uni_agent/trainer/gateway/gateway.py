@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from dataclasses import replace
 from logging import getLogger
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -64,6 +66,101 @@ _FINISH_REASON_MAP = {
     "aborted": "stop",
     "abort": "stop",
 }
+
+
+def _setup_gateway_trace_logger(actor_id: str) -> logging.Logger | None:
+    log_dir = os.environ.get("UNI_AGENT_GATEWAY_LOG_DIR")
+    if not log_dir:
+        return None
+
+    path = Path(log_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger(f"gateway.trace.{actor_id}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+
+    log_file = path / f"gateway_{actor_id}_pid{os.getpid()}.log"
+    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    logger.info("gateway trace logger initialized file=%s", log_file)
+    return logger
+
+
+def _get_int_env(name: str, default: int = 0) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        getLogger("gateway").warning("Ignoring invalid integer env %s=%r", name, value)
+        return default
+
+
+def _build_chat_completion_response(
+    *,
+    assistant_msg: dict[str, Any],
+    finish_reason: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> dict[str, Any]:
+    return {
+        "id": f"chatcmpl-{uuid4().hex}",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": assistant_msg,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+
+
+def _find_tool_name(tools: list[dict[str, Any]] | None, name: str) -> str | None:
+    if not tools:
+        return None
+    for tool_item in tools:
+        if not isinstance(tool_item, dict):
+            continue
+        function = tool_item.get("function")
+        if isinstance(function, dict) and function.get("name") == name:
+            return name
+        if tool_item.get("name") == name:
+            return name
+    return None
+
+
+def _build_context_limit_assistant_message(tools: list[dict[str, Any]] | None) -> tuple[dict[str, Any], str]:
+    action = os.environ.get("UNI_AGENT_GATEWAY_CONTEXT_LIMIT_ACTION", "submit").strip().lower()
+    if action == "submit" and _find_tool_name(tools, "submit"):
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": f"call_{uuid4().hex[:8]}",
+                    "type": "function",
+                    "function": {"name": "submit", "arguments": "{}"},
+                }
+            ],
+        }, "tool_calls"
+    return {
+        "role": "assistant",
+        "content": os.environ.get(
+            "UNI_AGENT_GATEWAY_CONTEXT_LIMIT_MESSAGE",
+            "Context length limit reached; stopping this rollout.",
+        ),
+    }, "length"
 
 
 # TODO: double-check if all these validations/normalization are necessary
@@ -318,6 +415,10 @@ class _GatewayActor:
         self._server_port: int | None = None
         self._server_task: asyncio.Task | None = None
         self._server_base_url: str | None = None
+        self._trace_actor_id = uuid4().hex[:12]
+        self._trace_logger = _setup_gateway_trace_logger(self._trace_actor_id)
+        self._max_generation_context_tokens = _get_int_env("UNI_AGENT_GATEWAY_MAX_CONTEXT_TOKENS", 0)
+        self._context_token_margin = _get_int_env("UNI_AGENT_GATEWAY_CONTEXT_TOKEN_MARGIN", 1024)
         self._register_routes()
 
     def _register_routes(self) -> None:
@@ -606,6 +707,11 @@ class _GatewayActor:
                 "session=%s request: %d messages, roles=%s",
                 session_id, len(_msgs), _roles,
             )
+            if self._trace_logger is not None:
+                self._trace_logger.info(
+                    "session=%s request: %d messages, roles=%s",
+                    session_id, len(_msgs), _roles,
+                )
 
         async with session.generation_lock:
             if session.phase != SessionPhase.ACTIVE:
@@ -674,6 +780,70 @@ class _GatewayActor:
                     allowed_request_sampling_param_keys=self._allowed_request_sampling_param_keys,
                 )
 
+                max_context_tokens = self._max_generation_context_tokens
+                context_guard_threshold = max_context_tokens - self._context_token_margin
+                should_stop_for_context = (
+                    max_context_tokens > 0
+                    and context_guard_threshold > 0
+                    and len(generation_context_ids) >= context_guard_threshold
+                )
+
+            if should_stop_for_context:
+                assistant_msg, finish_reason = _build_context_limit_assistant_message(tools)
+                response_ids = normalize_token_ids(
+                    self._tokenizer.encode(
+                        os.environ.get(
+                            "UNI_AGENT_GATEWAY_CONTEXT_LIMIT_TRAJECTORY_TEXT",
+                            "Context length limit reached.",
+                        ),
+                        add_special_tokens=False,
+                    )
+                )
+                active_trajectory.response_ids.extend(response_ids)
+                active_trajectory.response_mask.extend([1] * len(response_ids))
+                if active_trajectory.response_logprobs:
+                    active_trajectory.response_logprobs.extend([0.0] * len(response_ids))
+                if self._debug:
+                    getLogger("gateway").warning(
+                        "session=%s context guard triggered: prompt_tokens=%d threshold=%d max=%d margin=%d",
+                        session_id,
+                        len(generation_context_ids),
+                        context_guard_threshold,
+                        max_context_tokens,
+                        self._context_token_margin,
+                    )
+                    if self._trace_logger is not None:
+                        self._trace_logger.warning(
+                            "session=%s context guard triggered: prompt_tokens=%d threshold=%d max=%d margin=%d",
+                            session_id,
+                            len(generation_context_ids),
+                            context_guard_threshold,
+                            max_context_tokens,
+                            self._context_token_margin,
+                        )
+
+                async with session.request_lock:
+                    if session.phase != SessionPhase.ACTIVE:
+                        raise HTTPException(
+                            status_code=409, detail=f"Session {session_id} is {session.phase.value.lower()}"
+                        )
+
+                    if materialized_trajectory is not None:
+                        session.trajectories.append(materialized_trajectory)
+                    session.active_trajectory = active_trajectory
+                    session.image_data = list(image_data) if image_data is not None else None
+                    session.video_data = list(video_data) if video_data is not None else None
+                    session.message_history = messages + [assistant_msg]
+                    session.request_tools = tools
+                    self._touch_session(session)
+
+                    return _build_chat_completion_response(
+                        assistant_msg=assistant_msg,
+                        finish_reason=finish_reason,
+                        prompt_tokens=len(generation_context_ids),
+                        completion_tokens=len(response_ids),
+                    )
+
             try:
                 output = await self._backend.generate(
                     request_id=session_id,
@@ -707,6 +877,11 @@ class _GatewayActor:
                     "session=%s response: finish_reason=%s tool_calls=%s prompt_tokens=%d completion_tokens=%d",
                     session_id, finish_reason, _tc_names, len(generation_context_ids), len(response_ids),
                 )
+                if self._trace_logger is not None:
+                    self._trace_logger.info(
+                        "session=%s response: finish_reason=%s tool_calls=%s prompt_tokens=%d completion_tokens=%d",
+                        session_id, finish_reason, _tc_names, len(generation_context_ids), len(response_ids),
+                    )
             async with session.request_lock:
                 if session.phase != SessionPhase.ACTIVE:
                     raise HTTPException(
@@ -722,22 +897,12 @@ class _GatewayActor:
                 session.request_tools = tools
                 self._touch_session(session)
 
-                return {
-                    "id": f"chatcmpl-{uuid4().hex}",
-                    "object": "chat.completion",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": assistant_msg,
-                            "finish_reason": finish_reason,
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": len(generation_context_ids),
-                        "completion_tokens": len(response_ids),
-                        "total_tokens": len(generation_context_ids) + len(response_ids),
-                    },
-                }
+                return _build_chat_completion_response(
+                    assistant_msg=assistant_msg,
+                    finish_reason=finish_reason,
+                    prompt_tokens=len(generation_context_ids),
+                    completion_tokens=len(response_ids),
+                )
 
     async def start(self) -> None:
         if self._server_task is not None:

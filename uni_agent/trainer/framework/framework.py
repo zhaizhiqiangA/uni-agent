@@ -329,7 +329,9 @@ class OpenAICompatibleAgentFramework(AgentFramework):
         uid = str(uid)
 
         # Prompt layer: rollout.n sessions race independently for the same uid.
-        # Successful sessions are written to TQ; failed sessions only affect this uid's stats.
+        # Keep per-session outputs in memory until every session succeeds. A UID
+        # must contribute exactly rollout.n responses; partial success would be
+        # sampled by ReplayBuffer as a malformed training batch.
         tasks = [
             self._run_session_with_concurrency_limit(
                 prompts=prompts,
@@ -350,6 +352,7 @@ class OpenAICompatibleAgentFramework(AgentFramework):
         failed_sessions = 0
         success_outputs = 0
         failure_reasons: list[str] = []
+        successful_sessions: list[tuple[int, list[Trajectory], dict[str, object]]] = []
         for session_index, outcome in enumerate(outcomes):
             if isinstance(outcome, Exception):
                 failed_sessions += 1
@@ -363,20 +366,28 @@ class OpenAICompatibleAgentFramework(AgentFramework):
                 continue
 
             success_sessions += 1
-            await self._write_session_trajectories_to_tq(
-                uid=uid,
-                session_index=session_index,
-                trajectories=trajectories,
-                sample_fields=session_sample_fields,
-                global_steps=global_steps,
-                partition_id=partition_id,
-            )
             success_outputs += len(trajectories)
+            successful_sessions.append((session_index, trajectories, session_sample_fields))
 
-        if success_sessions > 0:
+        if success_sessions == num_sessions and success_outputs == num_sessions:
+            for session_index, trajectories, session_sample_fields in successful_sessions:
+                await self._write_session_trajectories_to_tq(
+                    uid=uid,
+                    session_index=session_index,
+                    trajectories=trajectories,
+                    sample_fields=session_sample_fields,
+                    global_steps=global_steps,
+                    partition_id=partition_id,
+                )
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
             failed_uids = 0
         else:
+            if success_sessions > 0:
+                failure_reasons.append(
+                    f"partial rollout for uid={uid}: "
+                    f"success_sessions={success_sessions}/{num_sessions}, "
+                    f"success_outputs={success_outputs}/{num_sessions}"
+                )
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
             failed_uids = 1
 
