@@ -25,7 +25,7 @@ Python, Node, or npm for the sidecar tool runtime.
 |--------|-------------|
 | `uniagent` | Original SWE-agent runner |
 | `mini_swe` | mini-swe-agent sidecar runner |
-| `claude_code` | Claude Code sidecar runner; reward is returned through `complete_session(reward_info)` without writing a separate reward JSON file |
+| `claude_code` | Claude Code sidecar runner |
 
 **Supported sandbox types:**
 
@@ -39,21 +39,21 @@ image does not need to be extracted into a host directory ahead of time.
 ## Architecture
 
 ```text
-[Rollouter Host: mini_swe_agent_runner / claude_code_runner]
+[Rollouter Host: mini_swe_agent_runner]
   |
   |-- _create_sandbox(image, sidecar_image)
   |     `-- openyuanrong: Sandbox(mounts=[Mount(target="/opt/<tool>", ...)])
   |
   |-- sandbox.run("<tool entrypoint>")
   |     `-- [Inside Sandbox]
-  |           /opt/mini-swe-agent/bin/python3.12 or /opt/claude-code/bin/claude
+  |           /opt/mini-swe-agent/bin/python3.12
   |           stdin <- task config JSON (task, gateway_url, agent)
   |           commands run inside the SWE-bench sandbox
   |           stdout -> runner-specific execution result
   |
   |-- parse agent result
   |-- SandboxEnvForReward(sandbox) -> evaluate_in_env()
-  `-- session_runtime.complete_session(reward_info)
+  `-- POST session.reward_info_url
 ```
 
 ## Prerequisites
@@ -64,15 +64,12 @@ image does not need to be extracted into a host directory ahead of time.
 
 ## 1. Build Tool Image
 
-`mini_swe` and `claude_code` are both injected into the SWE-bench sandbox as
-sidecar tool images, but they differ in image contents, mount paths, and
-accelerator/mirror options. Use `build_tool.sh` for both runners, and select the
-target runner with `--tool` or `TOOL_KIND`.
+`mini_swe` is injected into the SWE-bench sandbox as a sidecar tool image. Use
+`build_tool.sh` to build it.
 
 | runner | Default tool image | Dockerfile | Sandbox mount path | Image contents | Mirror option |
 |--------|--------------------|------------|--------------------|----------------|---------------|
 | `mini_swe` | `mini-swe-agent-tool:latest` | `Dockerfile.mini-swe-agent-tool` | `/opt/mini-swe-agent` | Standalone Python 3.12, `mini-swe-agent`, `litellm`, and `run_agent.py` | `--pip-index` / `PIP_INDEX_URL` |
-| `claude_code` | `claude-code-tool:latest` | `Dockerfile.claude-code-tool` | `/opt/claude-code` | Claude Code npm package installed by a Node 20 builder | `--npm-registry` / `NPM_REGISTRY` |
 
 ### mini_swe Tool Image
 
@@ -102,46 +99,9 @@ RUNNER=mini_swe \
 bash examples/swe_agent_blackbox/scripts/run_infer.sh
 ```
 
-### Claude Code Tool Image
-
-Claude Code must be selected explicitly with `--tool claude_code`:
-
-```bash
-# Use the default npm registry.
-bash examples/swe_agent_blackbox/build_tool.sh --tool claude_code
-
-# Use a custom npm registry.
-bash examples/swe_agent_blackbox/build_tool.sh \
-    --tool claude_code \
-    --npm-registry https://registry.npmmirror.com
-
-# Select the Claude Code npm package version.
-bash examples/swe_agent_blackbox/build_tool.sh \
-    --tool claude_code \
-    --tool-version latest
-
-# Build and push the Claude Code sidecar image.
-bash examples/swe_agent_blackbox/build_tool.sh \
-    --tool claude_code \
-    --registry swr.cn-east-3.myhuaweicloud.com/openyuanrong
-```
-
-The Claude Code image uses `node:20-bookworm-slim` as the builder stage and
-installs `@anthropic-ai/claude-code` into `/opt/claude-code`. The final image is
-also a `FROM scratch` sidecar image. At runtime, the runner mounts it into the
-sandbox at `/opt/claude-code` and invokes `/opt/claude-code/bin/claude`.
-
-After pushing the image, point runtime inference at it with `SWE_AGENT_TOOL_IMAGE`:
-
-```bash
-SWE_AGENT_TOOL_IMAGE=swr.cn-east-3.myhuaweicloud.com/openyuanrong/claude-code-tool:latest \
-RUNNER=claude_code \
-bash examples/swe_agent_blackbox/scripts/run_infer.sh
-```
-
 ### Combined Build Options
 
-`--tool`, image tags, mirrors, and registries can be combined:
+Image tags, mirrors, and registries can be combined:
 
 ```bash
 bash examples/swe_agent_blackbox/build_tool.sh \
@@ -154,24 +114,21 @@ The build script:
 
 1. Selects the Dockerfile and default image name from `--tool`:
    - `mini_swe` -> `mini-swe-agent-tool:latest`
-   - `claude_code` -> `claude-code-tool:latest`
 2. Tags and pushes the image when `--registry` is provided.
 
-Both tool images are sidecar runtime dependencies, not SWE-bench task base
-images. The `mini_swe` Python runtime is fully isolated from the sandbox
-container's Python. The `claude_code` Node/npm dependencies live only under
-`/opt/claude-code`, so the sandbox base image does not need Node installed.
+The tool image is a sidecar runtime dependency, not a SWE-bench task base image.
+The `mini_swe` Python runtime is fully isolated from the sandbox container's
+Python.
 
 ### Build Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TOOL_IMAGE` | `mini-swe-agent-tool` / `claude-code-tool` | Image name; the default changes with `TOOL_KIND` |
+| `TOOL_IMAGE` | `mini-swe-agent-tool` | Image name; the default changes with `TOOL_KIND` |
 | `TOOL_TAG` | `latest` | Image tag |
-| `TOOL_VERSION` | `latest` | Tool package version; for `claude_code`, this selects the `@anthropic-ai/claude-code` npm package version |
+| `TOOL_VERSION` | `latest` | Tool package version |
 | `PIP_INDEX_URL` | unset, use PyPI | pip index URL; equivalent to `--pip-index` |
-| `TOOL_KIND` | `mini_swe` | Tool kind: `mini_swe` or `claude_code` |
-| `NPM_REGISTRY` | unset, use npm default | npm registry URL; equivalent to `--npm-registry` |
+| `TOOL_KIND` | `mini_swe` | Tool kind |
 
 ## 2. Inference With OpenYuanRong Sandbox
 
@@ -222,19 +179,6 @@ SWE_AGENT_TOOL_IMAGE=swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent
 bash examples/swe_agent_blackbox/scripts/run_infer.sh
 ```
 
-### Run Claude Code
-
-```bash
-RUNNER=claude_code \
-OPENYUANRONG_SERVER_ADDRESS="6.2.179.37:8888" \
-OPENYUANRONG_TOKEN="<token>" \
-DEPLOYMENT=openyuanrong \
-SWE_AGENT_TOOL_IMAGE=swr.cn-east-3.myhuaweicloud.com/openyuanrong/claude-code-tool:latest \
-SWE_AGENT_MAX_TURNS=50 \
-SWE_AGENT_RUN_TIMEOUT=7200 \
-bash examples/swe_agent_blackbox/scripts/run_infer.sh
-```
-
 ## 4. Training (Fully Async)
 
 ```bash
@@ -250,20 +194,9 @@ The training YAML keeps `mini_swe` as the default runner:
 agent_runner_fqn: examples.swe_agent_blackbox.mini_swe_agent_runner.mini_swe_agent_runner
 ```
 
-To run training with Claude Code, keep the YAML unchanged and override the runner
-FQN from the launch command:
-
-```bash
-python3 -m verl.experimental.fully_async_policy.fully_async_main \
-  --config-path examples/swe_agent_blackbox/config \
-  --config-name swe_agent_blackbox_megatron_async \
-  actor_rollout_ref.rollout.custom.agent_framework.agent_runner_fqn=examples.swe_agent_blackbox.claude_code_runner.claude_code_runner
-```
-
 ## 5. Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SWE_AGENT_MAX_TURNS` | `100` | Max agent steps |
 | `SWE_AGENT_TOOL_IMAGE` | `swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent-tool:latest` | Sidecar tool image |
-| `DEBUG_MODE` | (unset) | Set to 1 to enable debug logging |

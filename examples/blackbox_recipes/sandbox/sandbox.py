@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -41,6 +42,14 @@ def _configure_akernel_env() -> None:
     os.environ["AKERNEL_SERVER_ADDRESS"] = server
     os.environ["AKERNEL_TOKEN"] = token
     os.environ["TUNNEL_SSL_VERIFY"] = tunnel_ssl_verify
+
+
+def _resolve_sandbox_name() -> str | None:
+    """Return ``{prefix}{random}`` when ``SANDBOX_NAME_PREFIX`` env is set."""
+    prefix = os.getenv("SANDBOX_NAME_PREFIX")
+    if not prefix:
+        return None
+    return f"{prefix}{uuid.uuid4().hex[:8]}"
 
 
 def extract_upstream(gateway_url: str) -> str:
@@ -97,7 +106,7 @@ class YRSandbox:
         mem_limit: int = 8192,
         idle_timeout: int = 7200,
         sidecar_target: str = "/opt/mini-swe-agent",
-        max_retries: int = 5,
+        max_retries: int = 10,
         **sandbox_kwargs: Any,
     ) -> "YRSandbox":
         """Create an OpenYuanRong sandbox with sidecar tool mounted.
@@ -127,11 +136,14 @@ class YRSandbox:
             sb_kwargs["proxy_port"] = proxy_port
         if env:
             sb_kwargs["env"] = env
+        name = _resolve_sandbox_name()
+        if name is not None:
+            sb_kwargs["name"] = name
         sb_kwargs.update(sandbox_kwargs)
 
         logger.info(
-            "Creating YR sandbox (image=%s, cpu=%d, memory=%d, sidecar=%s:%s, upstream=%s)",
-            image, cpu, memory, sidecar_image, sidecar_target, upstream or "none",
+            "Creating YR sandbox (image=%s, cpu=%d, memory=%d, sidecar=%s:%s, upstream=%s, name=%s)",
+            image, cpu, memory, sidecar_image, sidecar_target, upstream or "none", name or "auto",
         )
         last_error: Exception | None = None
         for retry in range(max_retries):

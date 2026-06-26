@@ -15,15 +15,15 @@ import shlex
 import time
 from pathlib import Path
 
-from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
+import httpx
 
-from examples.swe_agent_blackbox.dataset import extract_image
-from examples.swe_agent_blackbox.reward import build_reward_context, evaluate_in_env
-from examples.swe_agent_blackbox.sandbox import CommandResult, YRSandbox, extract_upstream, rewrite_gateway_url
+from uni_agent.gateway.session import SessionHandle
+
+from examples.blackbox_recipes.mini_swe_agent.dataset import extract_image
+from examples.blackbox_recipes.mini_swe_agent.reward import build_reward_context, evaluate_in_env
+from examples.blackbox_recipes.sandbox.sandbox import CommandResult, YRSandbox, extract_upstream, rewrite_gateway_url
 
 logger = logging.getLogger(__name__)
-if os.environ.get("DEBUG_MODE"):
-    logger.setLevel(logging.DEBUG)
 
 DEFAULT_TOOL_IMAGE = "swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent-tool:latest"
 
@@ -84,15 +84,20 @@ def build_agent_command(
 ) -> str:
     """Build the command that runs run_agent.py inside the sandbox."""
     conda_prefix = f"/opt/miniconda3/envs/{conda_env}"
-    env_prefix = (
+    run_agent_env = (
         f"CONDA_DEFAULT_ENV={shlex.quote(conda_env)} "
         f"CONDA_PREFIX={shlex.quote(conda_prefix)} "
-        f"PATH={shlex.quote(conda_prefix + '/bin')}:/opt/miniconda3/bin:$PATH"
+        f"PATH={shlex.quote(conda_prefix + '/bin')}:/opt/miniconda3/bin:$PATH "
+        "PIP_DISABLE_PIP_VERSION_CHECK=1 "
+        "PIP_PROGRESS_BAR=off"
     )
     return (
         "unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy; "
-        f"{env_prefix} "
-        f"echo {config_b64} | base64 -d | "
+        f"env {run_agent_env} sh -c 'echo \"[mini_swe] shell env: CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV "
+        "CONDA_PREFIX=$CONDA_PREFIX PATH=$PATH\" >&2; "
+        "echo \"[mini_swe] python=$(command -v python) pip=$(command -v pip)\" >&2' ; "
+        f"printf %s {shlex.quote(config_b64)} | base64 -d | "
+        f"env {run_agent_env} "
         "/opt/mini-swe-agent/bin/python /opt/mini-swe-agent/bin/run_agent.py"
     )
 
@@ -102,11 +107,11 @@ async def mini_swe_agent_runner(
     raw_prompt,
     session: SessionHandle,
     sample_index: int,
-    session_runtime: SessionRuntime,
     tools_kwargs: dict | None = None,
     tool_image: str = DEFAULT_TOOL_IMAGE,
     run_timeout: int = 7200,
     conda_env: str = "testbed",
+    sandbox_max_retries: int = 10,
     **kwargs,
 ) -> None:
     """Run mini-swe-agent inside a sandbox with sidecar tool mount.
@@ -116,7 +121,7 @@ async def mini_swe_agent_runner(
         2. Pipe task config to run_agent.py via stdin
         3. Parse agent result from stdout
         4. Evaluate reward in the same sandbox
-        5. Complete session with reward_info
+        5. Post reward_info for the framework reward path
     """
     tools_kwargs = tools_kwargs or {}
     logger.info("mini_swe_agent_runner called, sample_index=%d", sample_index)
@@ -137,7 +142,7 @@ async def mini_swe_agent_runner(
 
     upstream = extract_upstream(gateway_url)
     sandbox = await YRSandbox.create(
-        image=image, sidecar_image=tool_image, upstream=upstream,
+        image=image, sidecar_image=tool_image, upstream=upstream, max_retries=int(sandbox_max_retries),
     )
     sandbox_id = sandbox.sandbox_id
     logger.info("Sandbox created (image=%s, sandbox_id=%s)", image, sandbox_id)
@@ -190,7 +195,11 @@ async def mini_swe_agent_runner(
         )
 
         reward_info = {"reward_score": score, **eval_result}
-        await session_runtime.complete_session(session.session_id, reward_info=reward_info)
+        if not session.reward_info_url:
+            raise ValueError(f"reward_info_url is empty for session {session.session_id}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(session.reward_info_url, json={"reward_info": reward_info})
+            response.raise_for_status()
 
     except Exception as e:
         logger.warning("Mini-swe-agent runner failed for sample %d (sandbox_id=%s): %s", sample_index, sandbox_id, e)
