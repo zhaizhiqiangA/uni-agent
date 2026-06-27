@@ -8,7 +8,9 @@ import os
 import shlex
 import time
 
-from uni_agent.trainer.framework.types import SessionHandle, SessionRuntime
+import httpx
+
+from uni_agent.gateway.session import SessionHandle
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +164,6 @@ async def claude_code_runner(
     raw_prompt,
     session: SessionHandle,
     sample_index: int,
-    session_runtime: SessionRuntime,
     tools_kwargs: dict | None = None,
     tool_image: str = DEFAULT_TOOL_IMAGE,
     run_timeout: int = 7200,
@@ -227,6 +228,10 @@ async def claude_code_runner(
             "claude_code_exit_code": result.exit_code,
             **eval_result,
         }
-        await session_runtime.complete_session(session.session_id, reward_info=reward_info)
+        if not session.reward_info_url:
+            raise ValueError(f"reward_info_url is empty for session {session.session_id}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(session.reward_info_url, json={"reward_info": reward_info})
+            response.raise_for_status()
     finally:
         await sandbox.cleanup()
