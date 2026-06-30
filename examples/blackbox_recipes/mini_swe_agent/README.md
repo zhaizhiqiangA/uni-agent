@@ -58,7 +58,7 @@ image does not need to be extracted into a host directory ahead of time.
 
 ## Prerequisites
 
-1. **AKernel** - set `AKERNEL_SERVER_ADDRESS` and `AKERNEL_TOKEN`.
+1. **OpenYuanrong** - set `OPENYUANRONG_SERVER_ADDRESS` and `OPENYUANRONG_TOKEN`.
 2. **Runner tool image** - build the selected tool image and push it to a remote
    registry if the sandbox service cannot access local Docker images.
 
@@ -163,8 +163,9 @@ python examples/swe_agent_blackbox/parallel_infer.py \
 ### Environment Variables
 
 ```bash
-export AKERNEL_SERVER_ADDRESS="6.2.179.37:8888"
-export AKERNEL_TOKEN="<your-token>"
+export OPENYUANRONG_SERVER_ADDRESS="6.2.179.37:8888"
+export OPENYUANRONG_TOKEN="<your-token>"
+export OPENYUANRONG_TUNNEL_SSL_VERIFY="0"
 export DEPLOYMENT=openyuanrong
 ```
 
@@ -172,8 +173,9 @@ export DEPLOYMENT=openyuanrong
 
 ```bash
 RUNNER=mini_swe \
-AKERNEL_SERVER_ADDRESS="6.2.179.37:8888" \
-AKERNEL_TOKEN="<token>" \
+OPENYUANRONG_SERVER_ADDRESS="6.2.179.37:8888" \
+OPENYUANRONG_TOKEN="<token>" \
+OPENYUANRONG_TUNNEL_SSL_VERIFY="0" \
 DEPLOYMENT=openyuanrong \
 SWE_AGENT_TOOL_IMAGE=swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent-tool:latest \
 bash examples/swe_agent_blackbox/scripts/run_infer.sh
@@ -182,8 +184,9 @@ bash examples/swe_agent_blackbox/scripts/run_infer.sh
 ## 4. Training (Fully Async)
 
 ```bash
-AKERNEL_SERVER_ADDRESS="6.2.179.37:8888" \
-AKERNEL_TOKEN="<token>" \
+OPENYUANRONG_SERVER_ADDRESS="6.2.179.37:8888" \
+OPENYUANRONG_TOKEN="<token>" \
+OPENYUANRONG_TUNNEL_SSL_VERIFY="0" \
 MODEL_PATH=~/models/Qwen3.5-9B \
 bash examples/swe_agent_blackbox/scripts/run_train_megatron_async.sh
 ```

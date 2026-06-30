@@ -107,10 +107,10 @@ RUNNER_ARGS=(
     "actor_rollout_ref.rollout.custom.agent_framework.agent_runners.swe_agent.runner_kwargs.conda_env=${CONDA_ENV}"
 )
 
-# ── AKernel (remote sandbox) ─────────────────────────────────────────────
-AKERNEL_SERVER_ADDRESS="${AKERNEL_SERVER_ADDRESS:-}"
-AKERNEL_TOKEN="${AKERNEL_TOKEN:-}"
-AKERNEL_TUNNEL_SSL_VERIFY="${AKERNEL_TUNNEL_SSL_VERIFY:-0}"
+# ── OpenYuanrong / AKernel (remote sandbox) ────────────────────────────────
+OPENYUANRONG_SERVER_ADDRESS="${OPENYUANRONG_SERVER_ADDRESS:-}"
+OPENYUANRONG_TOKEN="${OPENYUANRONG_TOKEN:-}"
+OPENYUANRONG_TUNNEL_SSL_VERIFY="${OPENYUANRONG_TUNNEL_SSL_VERIFY:-0}"
 
 # ── Logging & checkpointing ──────────────────────────────────────────────
 PROJECT_NAME="${PROJECT_NAME:-swe_agent_blackbox}"
@@ -132,9 +132,9 @@ export SWE_AGENT_TOOL_IMAGE
 export SWE_AGENT_RUN_TIMEOUT
 export CONDA_ENV
 export GATEWAY_COUNT
-export AKERNEL_SERVER_ADDRESS
-export AKERNEL_TOKEN
-export AKERNEL_TUNNEL_SSL_VERIFY
+export OPENYUANRONG_SERVER_ADDRESS
+export OPENYUANRONG_TOKEN
+export OPENYUANRONG_TUNNEL_SSL_VERIFY
 export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/verl:${PYTHONPATH:-}"
 
 echo "=== SWE-Agent Blackbox Megatron Async Training ==="
@@ -171,9 +171,9 @@ env_vars = {
     key: value
     for key in (
         "PYTHONPATH",
-        "AKERNEL_SERVER_ADDRESS",
-        "AKERNEL_TOKEN",
-        "AKERNEL_TUNNEL_SSL_VERIFY",
+        "OPENYUANRONG_SERVER_ADDRESS",
+        "OPENYUANRONG_TOKEN",
+        "OPENYUANRONG_TUNNEL_SSL_VERIFY",
         "SWE_AGENT_MAX_TURNS",
         "SWE_AGENT_EVAL_TIMEOUT",
         "SWE_AGENT_TOOL_IMAGE",
