@@ -31,7 +31,7 @@ everything else (`dataset.py`, `reward.py`, `run_agent.py`, `build_tool.sh`,
 
 | Type | Description |
 |------|-------------|
-| openyuanrong | Uses `akernel_sdk.Mount` and `sandbox.commands.run()` |
+| openyuanrong | Uses `openyuanrong_sandbox_sdk.Mount` and `sandbox.commands.run()` |
 
 ## Architecture
 
@@ -39,7 +39,7 @@ everything else (`dataset.py`, `reward.py`, `run_agent.py`, `build_tool.sh`,
 [Rollouter Host: mini_swe_agent_runner]
   |
   |-- SandboxClient.create(image, sidecar_image, sidecar_target="/opt/mini-swe-agent")
-  |     `-- akernel: Sandbox(mounts=[Mount(target="/opt/mini-swe-agent", ...)])
+  |     `-- openYuanrong: Sandbox(mounts=[Mount(target="/opt/mini-swe-agent", ...)])
   |
   |-- sandbox.run("<tool entrypoint>")
   |     `-- [Inside Sandbox]
@@ -55,8 +55,8 @@ everything else (`dataset.py`, `reward.py`, `run_agent.py`, `build_tool.sh`,
 
 ## Prerequisites
 
-1. **AKernel** — set `AKERNEL_SERVER_ADDRESS` and `AKERNEL_TOKEN`.
-2. **Tool image** — build the mini-swe-agent tool image and push it to a remote
+1. **OpenYuanrong** - set `OPENYUANRONG_SERVER_ADDRESS` and `OPENYUANRONG_TOKEN`.
+2. **Tool image** - build the mini-swe-agent tool image and push it to a remote
    registry if the sandbox service cannot access local Docker images.
 
 ## 1. Build Tool Image
@@ -95,8 +95,8 @@ After pushing, point training at it with `SWE_AGENT_TOOL_IMAGE`.
 ## 2. Training (Fully Async)
 
 ```bash
-AKERNEL_SERVER_ADDRESS="6.2.179.37:8888" \
-AKERNEL_TOKEN="<token>" \
+OPENYUANRONG_SERVER_ADDRESS="6.2.179.37:8888" \
+OPENYUANRONG_TOKEN="<token>" \
 SWE_AGENT_TOOL_IMAGE=swr.cn-east-3.myhuaweicloud.com/openyuanrong/mini-swe-agent-tool:latest \
 MODEL_PATH=~/models/Qwen3.5-9B \
 bash examples/blackbox_recipes/mini_swe_agent/run_train.sh
