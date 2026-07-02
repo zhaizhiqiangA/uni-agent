@@ -39,7 +39,7 @@ RUN /opt/mini-swe-agent/bin/pip install --no-cache-dir \
 COPY run_agent.py /opt/mini-swe-agent/bin/run_agent.py
 
 # Final scratch image: files are at the image root level so that when
-# akernel_sdk.Mount(target="/opt/mini-swe-agent") overlays this image,
+# openyuanrong_sandbox_sdk.Mount(target="/opt/mini-swe-agent") overlays this image,
 # the files appear at /opt/mini-swe-agent/bin/python etc.
 FROM scratch
 COPY --from=builder /opt/mini-swe-agent /

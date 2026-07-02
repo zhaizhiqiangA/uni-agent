@@ -144,6 +144,7 @@ async def mini_swe_agent_runner(
         raise ValueError(f"gateway_url is empty for sample {sample_index}")
 
     upstream = extract_upstream(gateway_url)
+    SandboxClient.init()
     sandbox = await SandboxClient.create(
         image=image,
         sidecar_image=tool_image,
