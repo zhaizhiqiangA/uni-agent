@@ -1,37 +1,37 @@
-"""``shell`` tool + the stateful shell channel it owns.
+"""``shell`` tool + the stateful shell session it owns.
 
 The agent-facing unit is :class:`ShellTool` (registry key ``stateful_shell``, seen
-by the model as ``shell``): it holds a live :class:`ShellChannel` -- a detached tmux
-shell opened lazily and closed in :meth:`ShellTool.close` -- so cwd / exports /
-background jobs persist across calls. Only the command text crosses into the
-container; the agent stays on the host.
+by the model as ``shell``): it holds a live :class:`Shell` -- either
+:class:`SandboxShell` (sandbox ``open_shell``, e.g. openyuanrong) or
+:class:`TmuxShell` (tmux over one-shot exec) -- so cwd / exports persist
+across calls.
 
-:class:`ShellChannel` is a tool-private detail: it drives tmux entirely through the
-backend's one-shot :meth:`SandboxBackend.exec` (nothing resident installed beyond
-``tmux``). Each command redirects stdout/stderr to files and writes its exit code
-last as an unambiguous completion marker, with a ``tmux wait -S`` signal to wake the
-waiter the instant it finishes.
+:class:`TmuxShell` is the fallback for backends that only expose one-shot
+exec. Providers with ``supports_shell`` skip tmux entirely.
 """
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import dataclasses
+import logging
 import re
 import shlex
 import time
 import uuid
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from uni_agent.sandbox import SandboxBackend
+from uni_agent.sandbox import Sandbox, SandboxBackend
 from .base import Tool, ToolError, ToolResult, register_tool
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
 class CommandResult:
-    """Outcome of one command run in a shell channel."""
+    """Outcome of one command run in a shell session."""
 
     command_id: int
     command: str
@@ -47,11 +47,88 @@ class CommandResult:
         return self.end_time - self.start_time
 
 
-def _capture_wrapper(command: str, out: str, err: str, rc: str, *, signal: str | None, sock: str) -> str:
-    """Build the shell line running ``command`` under the file-capture protocol."""
-    b64 = base64.b64encode(command.encode()).decode("ascii")
+@runtime_checkable
+class Shell(Protocol):
+    """Minimal session surface used by :class:`ShellTool`."""
+
+    async def start(self) -> None: ...
+
+    async def run(self, command: str, *, timeout: float = 120.0) -> CommandResult: ...
+
+    async def close(self) -> None: ...
+
+
+class SandboxShell:
+    """:class:`Shell` backed by sandbox ``open_shell()`` (native provider session)."""
+
+    def __init__(self, handle: Any):
+        self._handle = handle
+        self._counter = 0
+
+    async def start(self) -> None:
+        return None
+
+    async def run(self, command: str, *, timeout: float = 120.0) -> CommandResult:
+        start = time.monotonic()
+        self._counter += 1
+        cid = self._counter
+        timed_out = False
+        code: int | None = None
+        stdout = ""
+        stderr = ""
+        try:
+            res = await self._handle.run(command, timeout=timeout)
+            code = res.exit_code
+            stdout = res.stdout or ""
+            stderr = res.stderr or ""
+        except Exception as exc:
+            name = type(exc).__name__
+            if name == "CommandTimeoutError" or isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+                timed_out = True
+                stderr = str(exc)
+            else:
+                raise
+        end = time.monotonic()
+        return CommandResult(
+            command_id=cid,
+            command=command,
+            exit_code=code,
+            stdout=stdout,
+            stderr=stderr,
+            start_time=start,
+            end_time=end,
+            timed_out=timed_out,
+        )
+
+    async def close(self) -> None:
+        await self._handle.close()
+
+
+async def open_shell_session(
+    backend: SandboxBackend,
+    *,
+    env: dict[str, str] | None = None,
+    width: int = 120,
+    height: int = 40,
+) -> Shell:
+    """Prefer a native shell; fall back to tmux-over-exec."""
+    if isinstance(backend, Sandbox) and backend.supports_shell:
+        handle = await backend.open_shell(env=env)
+        logger.info("stateful_shell using native shell (%s)", type(backend).__name__)
+        session: Shell = SandboxShell(handle)
+        await session.start()
+        return session
+
+    logger.info("stateful_shell using tmux shell (%s)", type(backend).__name__)
+    session = TmuxShell(backend, width=width, height=height, env=env)
+    await session.start()
+    return session
+
+
+def _capture_wrapper(command_path: str, out: str, err: str, rc: str, *, signal: str | None, sock: str) -> str:
+    """Build the shell line loading ``command_path`` under the file-capture protocol."""
     line = (
-        f"eval \"$(printf %s '{b64}' | base64 -d)\" "
+        f'eval "$(cat {shlex.quote(command_path)})" '
         f"> {shlex.quote(out)} 2> {shlex.quote(err)}; "
         f'__rc=$?; printf %s "$__rc" > {shlex.quote(rc)}.part '
         f"&& mv {shlex.quote(rc)}.part {shlex.quote(rc)}"
@@ -80,12 +157,11 @@ fi
 """.strip()
 
 
-class ShellChannel:
-    """Stateful shell held by a detached ``tmux`` session, driven via exec.
+class TmuxShell:
+    """:class:`Shell` backed by a detached tmux session, driven via one-shot exec.
 
-    The persistent handle the shell tool owns. Every tmux verb goes through
-    :meth:`SandboxBackend.exec`, so it works on any provider with a one-shot exec
-    (Modal, docker, ...) and installs nothing resident beyond ``tmux``.
+    Fallback for providers without ``open_shell``. Every tmux verb goes through
+    :meth:`SandboxBackend.exec`; only ``tmux`` needs to be present in the image.
     """
 
     def __init__(
@@ -171,9 +247,12 @@ class ShellChannel:
         cid = self._counter + 1
         self._counter = cid
         out, err, rc = self._paths(cid)
-        line = _capture_wrapper(command, out, err, rc, signal=self._chan(cid), sock=self._sock)
-        # Type the wrapped line then press Enter. `--` ends option parsing so a
-        # command starting with `-` is still typed literally.
+        command_path = f"{self._dir}/cmd_{cid}.input"
+        # Keep arbitrary-size command text out of tmux's command argv: tmux
+        # rejects an oversized `send-keys` argument before it reaches the pane.
+        await self.backend.write_file(command_path, command)
+        line = _capture_wrapper(command_path, out, err, rc, signal=self._chan(cid), sock=self._sock)
+        # Type the short wrapper then press Enter.
         res = await self.backend.exec(
             self._tmux("send-keys", "-t", self.session_id, "--", line, "Enter")
         )
@@ -192,7 +271,7 @@ class ShellChannel:
     async def run(self, command: str, *, timeout: float = 120.0) -> CommandResult:
         start = time.monotonic()
         cid = await self.start_command(command)
-        out, err, rc = self._paths(cid)
+        out, err, _ = self._paths(cid)
         chan = self._chan(cid)
         timed_out = False
         code: int | None = None
@@ -203,9 +282,8 @@ class ShellChannel:
                 break
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
-                await self.interrupt()
-                code = await self.poll(cid)
-                timed_out = code is None
+                timed_out = True
+                code = await self.interrupt(cid)
                 break
             # Event-driven wakeup: block on the command's tmux wait channel to
             # return the instant it signals. poll() stays the source of truth, so a
@@ -236,10 +314,22 @@ class ShellChannel:
         if res.exit_code != 0:
             raise RuntimeError(f"send_keys failed: {res.stderr.strip()}")
 
-    async def interrupt(self) -> None:
-        await self.backend.exec(
-            self._tmux("send-keys", "-t", self.session_id, "C-c")
-        )
+    async def interrupt(self, command_id: int | None = None) -> int | None:
+        """Send Ctrl-C, then suspend and kill the current job if it stays alive."""
+        await self.send_keys("C-c")
+        if command_id is None:
+            return None
+
+        await asyncio.sleep(2)
+        code = await self.poll(command_id)
+        if code is not None:
+            return code
+
+        await self.send_keys("C-z")
+        await asyncio.sleep(2)
+        await self.send_keys(["kill -KILL %+", "Enter"])
+        await asyncio.sleep(1)
+        return await self.poll(command_id)
 
     async def capture_pane(self, *, entire: bool = False) -> str:
         args = self._tmux("capture-pane", "-p")
@@ -338,23 +428,21 @@ class ShellTool(Tool):
 
     def __init__(self, sandbox: SandboxBackend, **kwargs: Any) -> None:
         super().__init__(sandbox, **kwargs)
-        self._shell: ShellChannel | None = None
+        self._shell: Shell | None = None
 
-    async def _ensure_shell(self) -> ShellChannel:
+    async def _ensure_shell(self) -> Shell:
         if self._shell is None:
-            shell = ShellChannel(
+            self._shell = await open_shell_session(
                 self.sandbox,
                 width=self.config.width,
                 height=self.config.height,
                 env=self.config.env_vars,
             )
-            await shell.start()
-            self._shell = shell
         return self._shell
 
     async def start(self) -> None:
-        # Open the channel now so the one-time tmux install/session setup happens
-        # up front rather than on the first command.
+        # Open the session now so first-use cost (native shell create, or tmux
+        # install/session setup) happens up front rather than on the first command.
         await self._ensure_shell()
 
     async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:

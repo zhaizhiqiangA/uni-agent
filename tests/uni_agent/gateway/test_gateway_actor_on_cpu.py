@@ -49,6 +49,14 @@ def test_gateway_actor_config_rejects_non_positive_response_length(response_leng
         GatewayActorConfig(tokenizer=FakeTokenizer(), response_length=response_length)
 
 
+@pytest.mark.parametrize("prompt_length", [0, -1])
+def test_gateway_actor_config_rejects_non_positive_prompt_length(prompt_length):
+    from uni_agent.gateway.config import GatewayActorConfig
+
+    with pytest.raises(ValueError, match="prompt_length must be positive"):
+        GatewayActorConfig(tokenizer=FakeTokenizer(), prompt_length=prompt_length)
+
+
 @pytest.mark.parametrize("value", ["true", 1, None])
 def test_gateway_actor_config_rejects_non_bool_last_assistant_rollback(value):
     from uni_agent.gateway.config import GatewayActorConfig
@@ -70,15 +78,21 @@ async def test_gateway_actor_forwards_last_assistant_rollback_to_session():
 
     actor = _GatewayActor(
         GatewayActorConfig(tokenizer=FakeTokenizer()),
-        SequencedBackend(["BAD", "FIXED"]),
+        SequencedBackend(["A1", "A2", "FIXED"]),
     )
     actor._server_base_url = "http://test"
     await actor.create_session("rollback-enabled")
     prompt = [{"role": "user", "content": "run"}]
+    continuation = [
+        *prompt,
+        {"role": "assistant", "content": "A1"},
+        {"role": "user", "content": "continue"},
+    ]
     await actor._handle_openai_chat_completions("rollback-enabled", {"messages": prompt})
+    await actor._handle_openai_chat_completions("rollback-enabled", {"messages": continuation})
     await actor._handle_openai_chat_completions(
         "rollback-enabled",
-        {"messages": [*prompt, {"role": "user", "content": "user_error"}]},
+        {"messages": [*continuation, {"role": "user", "content": "user_error"}]},
     )
 
     state = await actor.get_session_state("rollback-enabled")
@@ -87,8 +101,8 @@ async def test_gateway_actor_forwards_last_assistant_rollback_to_session():
 
 
 @pytest.mark.asyncio
-async def test_gateway_actor_max_tokens_clamped_to_remaining_response_budget():
-    """Continuation requests clamp ``max_tokens`` to the selected chain budget."""
+async def test_gateway_actor_max_tokens_clamped_to_remaining_trajectory_capacity():
+    """Clamp ``max_tokens`` to total capacity minus the selected chain context."""
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import _GatewayActor
 
@@ -98,50 +112,55 @@ async def test_gateway_actor_max_tokens_clamped_to_remaining_response_budget():
             tokenizer=FakeTokenizer(),
             prompt_length=2048,
             response_length=100,
-            base_sampling_params={"top_p": 0.8},
             allowed_request_sampling_param_keys={"max_tokens"},
         ),
         backend,
     )
     await actor.start()
     try:
-        await actor.create_session("s1")
+        await actor.create_session("s1", sampling_params={"top_p": 0.8})
         first_messages = [{"role": "user", "content": "hi"}]
         await actor._handle_openai_chat_completions("s1", {"messages": first_messages})
-        assert backend.calls[-1]["sampling_params"]["max_tokens"] == 100
+        total_capacity = 2048 + 100
+        assert backend.calls[-1]["sampling_params"]["max_tokens"] == total_capacity - len(
+            backend.calls[-1]["prompt_ids"]
+        )
 
         await actor._handle_openai_chat_completions(
             "s1",
             {
                 "messages": [*first_messages, {"role": "assistant", "content": "A" * 60}],
-                "max_tokens": 200,
+                "max_tokens": 5000,
             },
         )
 
-        assert backend.calls[-1]["sampling_params"]["max_tokens"] == 40
+        assert backend.calls[-1]["sampling_params"]["max_tokens"] == total_capacity - len(
+            backend.calls[-1]["prompt_ids"]
+        )
         assert backend.calls[-1]["sampling_params"]["top_p"] == 0.8
     finally:
         await actor.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_gateway_actor_over_budget_closes_without_backend_call():
+async def test_gateway_actor_exhausted_trajectory_closes_without_backend_call():
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import _GatewayActor
 
+    first_messages = [{"role": "user", "content": "hi"}]
+    prompt_length = len(FakeTokenizer().apply_chat_template(first_messages))
     backend = SequencedBackend(["A" * 60, "B"])
     actor = _GatewayActor(
         GatewayActorConfig(
             tokenizer=FakeTokenizer(),
-            prompt_length=2048,
-            response_length=50,
+            prompt_length=prompt_length,
+            response_length=60,
         ),
         backend,
     )
     await actor.start()
     try:
         await actor.create_session("s1")
-        first_messages = [{"role": "user", "content": "hi"}]
         await actor._handle_openai_chat_completions("s1", {"messages": first_messages})
 
         response = await actor._handle_openai_chat_completions(
@@ -186,17 +205,20 @@ async def test_gateway_actor_rejects_invalid_session_max_tokens_before_backend_c
 
 @pytest.mark.asyncio
 async def test_gateway_actor_continuation_budget_exhausted_materializes_length_stop():
-    """When a continuation request exceeds the selected chain response budget,
+    """When a continuation request exceeds the selected chain trajectory capacity,
     the gateway skips the backend call, closes that chain with
-    ``materialization_reason="max_response_length"``, and returns an empty
+    ``materialization_reason="max_trajectory_length"``, and returns an empty
     assistant message with ``finish_reason="length"``."""
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import _GatewayActor
 
+    first_messages = [{"role": "user", "content": "search"}]
+    prompt_length = len(FakeTokenizer().apply_chat_template(first_messages))
     backend = SequencedBackend(["A" * 45, "SHOULD_NOT_RUN"])
     actor = _GatewayActor(
         GatewayActorConfig(
             tokenizer=FakeTokenizer(),
+            prompt_length=prompt_length,
             response_length=50,
         ),
         backend,
@@ -204,7 +226,6 @@ async def test_gateway_actor_continuation_budget_exhausted_materializes_length_s
     await actor.start()
     try:
         await actor.create_session("s1")
-        first_messages = [{"role": "user", "content": "search"}]
         await actor._handle_openai_chat_completions("s1", {"messages": first_messages})
         backend.calls.clear()
         payload = {
@@ -227,7 +248,7 @@ async def test_gateway_actor_continuation_budget_exhausted_materializes_length_s
         trajectories = await actor.finalize_session("s1")
         assert len(trajectories) == 1
         trajectory = trajectories[0]
-        assert trajectory.extra_fields["materialization_reason"] == "max_response_length"
+        assert trajectory.extra_fields["materialization_reason"] == "max_trajectory_length"
         assert "length_truncated" not in trajectory.extra_fields
         assert "traj_exit_reason" not in trajectory.extra_fields
     finally:
@@ -810,7 +831,11 @@ async def test_gateway_actor_continuation_with_tool_returned_image_appends_media
     import uni_agent.gateway.session.codec as codec_mod
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import _GatewayActor
-    from verl.utils.tokenizer.chat_template import apply_chat_template, initialize_system_prompt
+    from verl.utils.tokenizer.chat_template import (
+        apply_chat_template,
+        initialize_system_prompt,
+        initialize_turn_separator,
+    )
 
     monkeypatch.setattr(codec_mod, "_extract_tool_calls_with_sglang_or_vllm", fake_tool_call_dispatch)
     processor = FakeProcessor()
@@ -904,7 +929,8 @@ async def test_gateway_actor_continuation_with_tool_returned_image_appends_media
         do_sample_frames=False,
     )["input_ids"][0].tolist()
     system_prompt = initialize_system_prompt(processor)
-    expected_incremental_ids = incremental_prompt_ids[len(system_prompt) :]
+    turn_separator = initialize_turn_separator(processor)
+    expected_incremental_ids = turn_separator + incremental_prompt_ids[len(system_prompt) :]
     expected_prompt_ids = initial_prompt_ids + [ord(char) for char in tool_call_text] + expected_incremental_ids
     assert second_call["prompt_ids"] == expected_prompt_ids
 
@@ -980,7 +1006,7 @@ async def test_gateway_actor_context_change_splits_trajectory(ray_runtime, sessi
                     "SAFE",
                     expected_sampling_params={"temperature": 0.25, "top_p": 0.8, "max_tokens": 128},
                 ),
-                "base_sampling_params": {"temperature": 0.1, "top_p": 0.8, "max_tokens": 64},
+                "session_sampling_params": {"temperature": 0.1, "top_p": 0.8, "max_tokens": 64},
                 "allowed_request_sampling_param_keys": {"temperature", "max_tokens"},
             },
             "session-envelope-boundary",
@@ -991,14 +1017,14 @@ async def test_gateway_actor_context_change_splits_trajectory(ray_runtime, sessi
                 "tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}],
             },
         ),
-        # Non-whitelisted key (top_p) in request is ignored; base_sampling_params used as-is.
+        # Non-whitelisted key (top_p) in request is ignored; session sampling params are used as-is.
         (
             {
                 "backend": RejectRequestEnvelopeBackend(
                     "SAFE",
                     expected_sampling_params={"temperature": 0.1, "top_p": 0.9},
                 ),
-                "base_sampling_params": {"temperature": 0.1, "top_p": 0.9},
+                "session_sampling_params": {"temperature": 0.1, "top_p": 0.9},
                 "allowed_request_sampling_param_keys": {"temperature"},
             },
             "session-non-whitelist",
@@ -1009,16 +1035,19 @@ async def test_gateway_actor_context_change_splits_trajectory(ray_runtime, sessi
 async def test_gateway_actor_allowlist_filters_sampling_params(ray_runtime, backend_kwargs, session_id, request_extra):
     """The sampling-param allowlist filters request keys: non-whitelisted keys
     (e.g. ``presence_penalty``) are stripped, and envelope fields (model,
-    tools, messages) never leak into sampling params. Base sampling params
+    tools, messages) never leak into sampling params. Session sampling params
     supply defaults when the request omits a key."""
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import GatewayActor
 
     backend = backend_kwargs["backend"]
-    config_kwargs = {key: value for key, value in backend_kwargs.items() if key != "backend"}
+    session_sampling_params = backend_kwargs["session_sampling_params"]
+    config_kwargs = {
+        key: value for key, value in backend_kwargs.items() if key not in {"backend", "session_sampling_params"}
+    }
     actor = GatewayActor.remote(GatewayActorConfig(tokenizer=FakeTokenizer(), **config_kwargs), backend)
     ray.get(actor.start.remote())
-    session = ray.get(actor.create_session.remote(session_id))
+    session = ray.get(actor.create_session.remote(session_id, sampling_params=session_sampling_params))
 
     async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
         response = await client.post(
@@ -1038,7 +1067,7 @@ async def test_gateway_actor_allowlist_filters_sampling_params(ray_runtime, back
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["openai", "anthropic"])
 async def test_gateway_actor_session_sampling_defaults_are_isolated_and_request_overridable(provider):
-    """Both provider handlers apply base, session, then request sampling params."""
+    """Both provider handlers apply session defaults, then request sampling params."""
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import _GatewayActor
 
@@ -1046,25 +1075,30 @@ async def test_gateway_actor_session_sampling_defaults_are_isolated_and_request_
     actor = _GatewayActor(
         GatewayActorConfig(
             tokenizer=FakeTokenizer(),
-            base_sampling_params={
-                "temperature": 0.1,
-                "top_p": 0.2,
-                "top_k": 1,
-                "presence_penalty": 0.3,
-            },
-            response_length=64,
         ),
         backend,
     )
     await actor.start()
-    train_sampling_params = {"temperature": 0.4, "top_p": 0.5, "logprobs": True}
+    train_sampling_params = {
+        "temperature": 0.4,
+        "top_p": 0.5,
+        "top_k": 1,
+        "presence_penalty": 0.3,
+        "logprobs": True,
+    }
     handler = actor._handle_openai_chat_completions if provider == "openai" else actor._handle_anthropic_messages
     try:
         await actor.create_session("train-session", sampling_params=train_sampling_params)
         train_sampling_params["temperature"] = 9.0
         await actor.create_session(
             "val-session",
-            sampling_params={"temperature": 0, "top_p": 0.9, "top_k": -1, "logprobs": False},
+            sampling_params={
+                "temperature": 0,
+                "top_p": 0.9,
+                "top_k": -1,
+                "presence_penalty": 0.3,
+                "logprobs": False,
+            },
         )
 
         await handler(
@@ -1092,7 +1126,7 @@ async def test_gateway_actor_session_sampling_defaults_are_isolated_and_request_
             "top_k": 1,
             "presence_penalty": 0.3,
             "logprobs": True,
-            "max_tokens": 64,
+            "max_tokens": 128,
         },
         {
             "temperature": 0,
