@@ -32,6 +32,100 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 DEFAULT_PROXY_PORT = 38197
 
+# ── Patch akernel_sdk RPC timeout ───────────────────────────────────────
+# The SDK hardcodes YR_GET_DEFAULT_TIMEOUT = 300 in types.py.
+# When the proxy (netentsec) kills the CONNECT tunnel after 30s idle,
+# every subsequent yr.get() call waits the full 300s before giving up.
+#
+# We patch it down to a reasonable value (60s by default, configurable
+# via AKERNEL_RPC_TIMEOUT env var).  Both types.py and commands.py hold
+# their own references (from … import …), so both must be patched.
+_RPC_TIMEOUT = int(os.getenv("AKERNEL_RPC_TIMEOUT", "60"))
+
+
+def _patch_yr_timeout() -> None:
+    import akernel_sdk.types
+    import akernel_sdk.commands
+
+    old = akernel_sdk.types.YR_GET_DEFAULT_TIMEOUT
+    akernel_sdk.types.YR_GET_DEFAULT_TIMEOUT = _RPC_TIMEOUT
+    akernel_sdk.commands.YR_GET_DEFAULT_TIMEOUT = _RPC_TIMEOUT
+    logger.info(
+        "Patched YR_GET_DEFAULT_TIMEOUT: %ds → %ds (env AKERNEL_RPC_TIMEOUT=%s)",
+        old,
+        _RPC_TIMEOUT,
+        os.getenv("AKERNEL_RPC_TIMEOUT", "default"),
+    )
+
+    # Also teach _is_fatal_poll_error about our repair: after
+    # yr.finalize() the in-flight yr.get() calls fail with
+    # "does not exist in storeMap" / "already finalized".  Without this,
+    # _poll_pid_until_done treats them as transient and keeps polling
+    # (spamming memory_store.cpp errors every second) until its deadline.
+    _orig_is_fatal = akernel_sdk.commands._is_fatal_poll_error
+
+    def _is_fatal_poll_error(exc: Exception) -> bool:
+        s = str(exc)
+        if "does not exist in storeMap" in s or "already finalized" in s:
+            return True
+        return _orig_is_fatal(exc)
+
+    akernel_sdk.commands._is_fatal_poll_error = _is_fatal_poll_error
+    logger.info("Patched _is_fatal_poll_error: storeMap/finalized → fatal (stop polling)")
+
+
+# Safe to call unconditionally — the modules are already importable.
+_patch_yr_timeout()
+
+
+# ── Connection-death detection & yr rebuild ─────────────────────────────
+# The netentsec proxy drops the CONNECT tunnel after ~30s idle.  When that
+# happens the shared yr RPC connection (gw_client) is dead and every
+# subsequent operation waits the RPC timeout before failing.  Detection
+# markers below are the SDK's failure signatures.
+
+def is_dead_connection(result) -> bool:
+    """Return True if a ``commands.run`` result indicates the yr connection
+    (or the remote instance) is irrecoverably gone."""
+    if getattr(result, "exit_code", 0) == 0:
+        return False
+    stderr = getattr(result, "stderr", "") or ""
+    markers = (
+        "timed out after",          # our asyncio.wait_for wrapper
+        "object timeout",           # yr: Get object timeout (code 4005)
+        "stream truncated",         # yr: HTTP stream truncated
+        "failed to get object",     # yr: Get object timeout
+        "already finalized",        # yr: runtime finalized mid-call
+    )
+    return any(m in stderr for m in markers)
+
+
+def repair_yr_connection(reason: str = "") -> None:
+    """Rebuild the yr RPC connection.
+
+    yr runtime is process-global and initialized once by akernel_sdk
+    (``ensure_yr_init``).  When the shared connection dies (proxy idle
+    timeout), every subsequent sandbox operation times out.  This function
+    tears the runtime down and resets akernel_sdk's init flag so the next
+    ``Sandbox()`` construction re-initializes with a fresh connection.
+
+    Must be called *between* sessions — any live sandbox is invalidated.
+    """
+    import yr
+    import akernel_sdk.sandbox as sb_mod
+
+    logger.warning("[sandbox_repair] rebuilding yr connection (reason: %s)", reason or "connection dead")
+    try:
+        yr.finalize()
+        logger.info("[sandbox_repair] yr.finalize() OK — old connection destroyed")
+    except Exception as e:
+        logger.warning("[sandbox_repair] yr.finalize() error: %s", e)
+    try:
+        sb_mod._yr_initialized = False
+        logger.info("[sandbox_repair] akernel_sdk._yr_initialized reset → next sandbox create will re-init")
+    except Exception as e:
+        logger.warning("[sandbox_repair] failed to reset _yr_initialized: %s", e)
+
 
 def _configure_akernel_env() -> None:
     """Validate AKernel credentials and map the tunnel SSL flag for akernel_sdk.
@@ -180,29 +274,64 @@ class SandboxClient:
         raise RuntimeError(f"Failed to create sandbox after {max_retries} retries") from last_error
 
     async def run(self, cmd: str, *, timeout: int = 600) -> CommandResult:
-        """Execute *cmd* inside the sandbox via ``sandbox.commands.run``."""
+        """Execute *cmd* inside the sandbox via ``sandbox.commands.run``.
+
+        Wrapped with ``asyncio.wait_for`` so that a dead yr RPC connection
+        (e.g. proxy-killed CONNECT tunnel) fails in *timeout* + 30 s instead
+        of the SDK-default 300 s.
+        """
         try:
-            result = await asyncio.to_thread(
-                self._sandbox.commands.run,
-                cmd,
-                timeout=timeout,
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._sandbox.commands.run,
+                    cmd,
+                    timeout=timeout,
+                ),
+                timeout=timeout + 30,
             )
             return CommandResult(
                 stdout=getattr(result, "stdout", ""),
                 stderr=getattr(result, "stderr", ""),
                 exit_code=getattr(result, "exit_code", -1),
             )
+        except asyncio.TimeoutError:
+            return CommandResult(
+                stdout="",
+                stderr=f"sandbox run timed out after {timeout + 30}s",
+                exit_code=-1,
+            )
         except Exception as e:
             return CommandResult(stdout="", stderr=str(e), exit_code=-1)
 
     async def cleanup(self) -> None:
-        """Kill the sandbox if still running."""
+        """Kill the sandbox if still running.
+
+        Both ``is_running()`` and ``kill()`` are wrapped with short timeouts
+        so a dead yr RPC connection doesn't block for 300 s.
+        """
         if self._sandbox is not None:
             sandbox_id = getattr(self._sandbox, "sandbox_id", "?")
             try:
-                if self._sandbox.is_running():
-                    await asyncio.to_thread(self._sandbox.kill)
-                    logger.info("sandbox %s killed", sandbox_id)
+                is_alive = False
+                try:
+                    is_alive = await asyncio.wait_for(
+                        asyncio.to_thread(self._sandbox.is_running),
+                        timeout=15,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("is_running() timed out for sandbox %s — assuming dead", sandbox_id)
+                except Exception:
+                    pass
+
+                if is_alive:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(self._sandbox.kill),
+                            timeout=15,
+                        )
+                        logger.info("sandbox %s killed", sandbox_id)
+                    except asyncio.TimeoutError:
+                        logger.warning("kill() timed out for sandbox %s", sandbox_id)
                 else:
                     logger.info("sandbox %s already stopped", sandbox_id)
             except Exception as e:
