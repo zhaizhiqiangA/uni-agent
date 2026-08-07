@@ -11,6 +11,7 @@ from swebench.harness.constants import (
     START_TEST_OUTPUT,
     EvalType,
     ResolvedStatus,
+    TestStatus,
 )
 from swebench.harness.grading import get_eval_tests_report, get_resolution_status
 from swebench.harness.log_parsers import MAP_REPO_TO_PARSER
@@ -72,6 +73,32 @@ def _make_eval_script_list(instance, specs, env_name, repo_directory, base_commi
     return eval_commands
 
 
+def _merge_legacy_pytest_statuses(log: str, status_map: dict[str, str]) -> None:
+    """Add statuses emitted as ``nodeid STATUS`` by older pytest versions.
+
+    The SWE-bench ``parse_log_pytest_v2`` compatibility branch reverses these
+    two fields, producing entries such as ``{"PASSED": "path::test"}``.  Keep
+    the upstream parser for every other output form and supplement only lines
+    whose final token is an exact pytest status.
+    """
+    statuses = {status.value for status in TestStatus}
+    for line in log.splitlines():
+        node_id, separator, status = line.strip().rpartition(" ")
+        if separator and node_id and status in statuses:
+            status_map[node_id] = status
+
+
+def _merge_legacy_pytest_parameter_ids(
+    status_map: dict[str, str], expected_tests: list[str]
+) -> None:
+    """Alias pytest 3's generated ``unit0`` ID to the dataset's empty ID."""
+    for expected in expected_tests:
+        if expected.endswith("[]") and expected not in status_map:
+            generated_id = f"{expected[:-2]}[unit0]"
+            if generated_id in status_map:
+                status_map[expected] = status_map[generated_id]
+
+
 @register_reward_spec("swe_bench")
 class SWEBenchRewardSpec(AbstractRewardSpec):
     def __init__(self, *, run_id: str, metadata: dict, env: AgentEnv, eval_timeout: int = 300):
@@ -82,7 +109,7 @@ class SWEBenchRewardSpec(AbstractRewardSpec):
         self.eval_timeout = eval_timeout
 
     @auto_await
-    async def apply_gold_patch(self) -> str:
+    async def apply_gold_patch(self) -> None:
         gold_patch = self.metadata["patch"]
         await self._apply_patch(gold_patch)
 
@@ -135,7 +162,7 @@ class SWEBenchRewardSpec(AbstractRewardSpec):
             result["eval_completed"] = True
             result["eval_execution_time"] = execution_time
 
-            # Remove ANSI escape codes and \r
+            # This normalized output is the exact value passed to the parser.
             output = re.sub(r"\x1b\[[0-9;]*m|\r", "", output)
 
             eval_report = self._get_eval_report(output)
@@ -192,6 +219,7 @@ class SWEBenchRewardSpec(AbstractRewardSpec):
         if START_TEST_OUTPUT in eval_output and END_TEST_OUTPUT in eval_output:
             test_content = eval_output.split(START_TEST_OUTPUT)[1].split(END_TEST_OUTPUT)[0]
             status_map = log_parser(test_content, None)
+            _merge_legacy_pytest_statuses(test_content, status_map)
             return status_map, True
         else:
             status_map = {}
@@ -216,6 +244,9 @@ class SWEBenchRewardSpec(AbstractRewardSpec):
             "FAIL_TO_PASS": json.loads(self.metadata.get("FAIL_TO_PASS", "[]")),
             "PASS_TO_PASS": json.loads(self.metadata.get("PASS_TO_PASS", "[]")),
         }
+        _merge_legacy_pytest_parameter_ids(
+            status_map, eval_ref["FAIL_TO_PASS"] + eval_ref["PASS_TO_PASS"]
+        )
         repo = self.metadata["repo"]
         eval_type = EvalType.FAIL_ONLY if repo in FAIL_ONLY_REPOS else EvalType.PASS_AND_FAIL
         report = get_eval_tests_report(status_map, eval_ref, eval_type=eval_type)
